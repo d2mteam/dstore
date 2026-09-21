@@ -72,27 +72,29 @@ func main() {
 	srv.Shutdown(shutdownCtx)
 }
 
-// openStore mở nơi lưu shard theo cấu hình. Với MinIO thì chờ tới khi nó sẵn
-// sàng, vì trong docker compose node thường khởi động trước MinIO.
+// openStore mở nơi lưu shard theo cấu hình. Với S3 thì chờ tới khi kết nối được,
+// vì trong docker compose node thường khởi động trước MinIO.
 func openStore(ctx context.Context, kind, nodeID string, log *slog.Logger) (node.ShardStore, error) {
 	if kind != "s3" {
 		return node.NewDiskStore(env("DATA_DIR", "./data"))
 	}
 
+	// Khóa truy cập và region theo chuẩn AWS: AWS_ACCESS_KEY_ID,
+	// AWS_SECRET_ACCESS_KEY, AWS_REGION — hoặc IAM role khi chạy trên AWS.
 	cfg := node.S3Config{
-		Endpoint:  env("S3_ENDPOINT", "localhost:9000"),
-		AccessKey: env("S3_ACCESS_KEY", "minioadmin"),
-		SecretKey: env("S3_SECRET_KEY", "minioadmin"),
-		Bucket:    env("S3_BUCKET", nodeID), // mặc định mỗi node một bucket trùng tên node
-		UseSSL:    env("S3_USE_SSL", "false") == "true",
+		Bucket:       env("S3_BUCKET", ""),
+		Prefix:       env("S3_PREFIX", "nodes/"+nodeID+"/"),
+		Endpoint:     env("S3_ENDPOINT", ""), // để trống khi dùng Amazon S3
+		UsePathStyle: env("S3_FORCE_PATH_STYLE", "false") == "true",
+		CreateBucket: env("S3_CREATE_BUCKET", "false") == "true",
 	}
 	for attempt := 1; ; attempt++ {
 		store, err := node.NewS3Store(ctx, cfg)
 		if err == nil {
-			log.Info("đã kết nối MinIO", "endpoint", cfg.Endpoint, "bucket", cfg.Bucket)
+			log.Info("đã kết nối S3", "endpoint", cfg.Endpoint, "bucket", cfg.Bucket, "prefix", cfg.Prefix)
 			return store, nil
 		}
-		log.Warn("chưa kết nối được MinIO, thử lại", "attempt", attempt, "err", err)
+		log.Warn("chưa kết nối được S3, thử lại", "attempt", attempt, "err", err)
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()

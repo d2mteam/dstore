@@ -4,74 +4,124 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 
-	"github.com/minio/minio-go/v7"
-	"github.com/minio/minio-go/v7/pkg/credentials"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 )
 
-// S3Config là thông tin kết nối MinIO (hoặc bất kỳ dịch vụ tương thích S3 nào).
+// S3Config là cấu hình kết nối tới Amazon S3 hoặc dịch vụ tương thích (MinIO).
+// Thông tin đăng nhập và region lấy từ chuỗi xác thực mặc định của AWS: biến
+// AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY/AWS_REGION, profile, hoặc IAM role của
+// ECS/EC2/EKS — nên trên AWS không cần nhét khóa tĩnh vào cấu hình.
 type S3Config struct {
-	Endpoint  string // ví dụ "minio:9000", không kèm http://
-	AccessKey string
-	SecretKey string
-	Bucket    string // mỗi node một bucket riêng
-	UseSSL    bool
+	// Bucket dùng chung cho mọi node. Tên bucket trên AWS là duy nhất toàn cầu,
+	// nên không thể mỗi node một bucket tên "node-1", "node-2"...
+	Bucket string
+	// Prefix tách shard của từng node, ví dụ "nodes/node-1/".
+	Prefix string
+	// Endpoint để trống khi dùng Amazon S3; đặt khi dùng MinIO, ví dụ "http://minio:9000".
+	Endpoint string
+	// UsePathStyle: MinIO cần true (http://minio:9000/bucket/key); Amazon S3 dùng
+	// dạng virtual-hosted (bucket.s3.amazonaws.com) nên để false.
+	UsePathStyle bool
+	// CreateBucket tạo bucket nếu chưa có — tiện khi dev với MinIO. Trên AWS
+	// bucket nên do hạ tầng tạo trước, và role của node không cần quyền tạo bucket.
+	CreateBucket bool
 }
 
 // maxShardBytes giới hạn kích thước một shard. Shard thường cỡ segment/k (1 MB
 // với cấu hình mặc định), nên 64 MB là rộng rãi mà vẫn chặn được body bất thường.
 const maxShardBytes = 64 << 20
 
-// S3Store cất shard trong một bucket MinIO, mỗi shard một object tên là hash.
+// S3Store cất mỗi shard thành một object <prefix><hash>.
 type S3Store struct {
-	client *minio.Client
+	client *s3.Client
 	bucket string
+	prefix string
 
 	mu    sync.RWMutex
 	used  int64
 	count int
 }
 
-// NewS3Store kết nối MinIO, tạo bucket nếu chưa có, rồi đếm lại shard đang có.
+// NewS3Store kết nối S3, kiểm tra bucket dùng được, rồi đếm lại shard đang có.
 func NewS3Store(ctx context.Context, cfg S3Config) (*S3Store, error) {
-	client, err := minio.New(cfg.Endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
-		Secure: cfg.UseSSL,
+	if cfg.Bucket == "" {
+		return nil, errors.New("thiếu tên bucket")
+	}
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("đọc cấu hình AWS: %w", err)
+	}
+	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
+		if cfg.Endpoint != "" {
+			o.BaseEndpoint = aws.String(cfg.Endpoint)
+		}
+		o.UsePathStyle = cfg.UsePathStyle
 	})
-	if err != nil {
-		return nil, fmt.Errorf("tạo client MinIO: %w", err)
+
+	s := &S3Store{client: client, bucket: cfg.Bucket, prefix: cfg.Prefix}
+	if err := s.checkBucket(ctx, cfg.CreateBucket, awsCfg.Region); err != nil {
+		return nil, err
 	}
 
-	exists, err := client.BucketExists(ctx, cfg.Bucket)
-	if err != nil {
-		return nil, fmt.Errorf("kiểm tra bucket %s: %w", cfg.Bucket, err)
-	}
-	if !exists {
-		err := client.MakeBucket(ctx, cfg.Bucket, minio.MakeBucketOptions{})
-		// Hai tiến trình cùng tạo một lúc thì bên thua nhận lỗi này — không sao cả.
-		if err != nil && minio.ToErrorResponse(err).Code != "BucketAlreadyOwnedByYou" {
-			return nil, fmt.Errorf("tạo bucket %s: %w", cfg.Bucket, err)
+	pages := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{
+		Bucket: aws.String(s.bucket), Prefix: aws.String(s.prefix),
+	})
+	for pages.HasMorePages() {
+		page, err := pages.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("liệt kê %s/%s: %w", s.bucket, s.prefix, err)
 		}
-	}
-
-	s := &S3Store{client: client, bucket: cfg.Bucket}
-	for obj := range client.ListObjects(ctx, cfg.Bucket, minio.ListObjectsOptions{Recursive: true}) {
-		if obj.Err != nil {
-			return nil, fmt.Errorf("liệt kê bucket %s: %w", cfg.Bucket, obj.Err)
+		for _, obj := range page.Contents {
+			s.used += aws.ToInt64(obj.Size)
+			s.count++
 		}
-		s.used += obj.Size
-		s.count++
 	}
 	return s, nil
 }
 
-// Put đọc hết shard vào RAM để kiểm SHA-256 trước khi ghi, nên trong bucket
-// không bao giờ có object sai hash. Không cần file tạm như DiskStore: PutObject
-// của S3 là nguyên tử — object hoặc có đủ, hoặc không có.
+// checkBucket báo lỗi sớm nếu bucket không tồn tại hoặc không có quyền, thay vì
+// để lỗi lộ ra ở lần ghi shard đầu tiên.
+func (s *S3Store) checkBucket(ctx context.Context, create bool, region string) error {
+	_, err := s.client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(s.bucket)})
+	if err == nil {
+		return nil
+	}
+	if !isNotFound(err) || !create {
+		return fmt.Errorf("không dùng được bucket %s: %w", s.bucket, err)
+	}
+
+	input := &s3.CreateBucketInput{Bucket: aws.String(s.bucket)}
+	// us-east-1 là mặc định của S3 và không được ghi rõ; region khác thì bắt buộc.
+	if region != "" && region != "us-east-1" {
+		input.CreateBucketConfiguration = &types.CreateBucketConfiguration{
+			LocationConstraint: types.BucketLocationConstraint(region),
+		}
+	}
+	_, err = s.client.CreateBucket(ctx, input)
+	var owned *types.BucketAlreadyOwnedByYou
+	if err != nil && !errors.As(err, &owned) { // node khác vừa tạo trước — không sao
+		return fmt.Errorf("tạo bucket %s: %w", s.bucket, err)
+	}
+	return nil
+}
+
+func (s *S3Store) key(hash string) string { return s.prefix + hash }
+
+// Put đọc hết shard vào RAM để kiểm SHA-256 trước khi ghi (shard chỉ cỡ 1 MB),
+// nên trong bucket không bao giờ có object sai hash. Không cần file tạm như
+// DiskStore: PutObject của S3 là nguyên tử — object hoặc có đủ, hoặc không có.
 func (s *S3Store) Put(ctx context.Context, hash string, r io.Reader) error {
 	if !validHash(hash) {
 		return fmt.Errorf("%w: %q", ErrInvalidHash, hash)
@@ -91,8 +141,17 @@ func (s *S3Store) Put(ctx context.Context, hash string, r io.Reader) error {
 	if s.Has(ctx, hash) {
 		return nil // content addressing: đã có đúng nội dung này
 	}
-	_, err = s.client.PutObject(ctx, s.bucket, hash, bytes.NewReader(data), int64(len(data)),
-		minio.PutObjectOptions{ContentType: "application/octet-stream"})
+	_, err = s.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:        aws.String(s.bucket),
+		Key:           aws.String(s.key(hash)),
+		Body:          bytes.NewReader(data),
+		ContentLength: aws.Int64(int64(len(data))),
+		ContentType:   aws.String("application/octet-stream"),
+		// Gửi kèm chính SHA-256 đó để S3 kiểm lại phía server: byte hỏng trên
+		// đường truyền bị từ chối, không lọt vào bucket.
+		ChecksumAlgorithm: types.ChecksumAlgorithmSha256,
+		ChecksumSHA256:    aws.String(base64.StdEncoding.EncodeToString(sum[:])),
+	})
 	if err != nil {
 		return fmt.Errorf("ghi object %s: %w", hash[:8], err)
 	}
@@ -108,27 +167,25 @@ func (s *S3Store) Open(ctx context.Context, hash string) (io.ReadCloser, int64, 
 	if !validHash(hash) {
 		return nil, 0, fmt.Errorf("%w: %q", ErrInvalidHash, hash)
 	}
-	obj, err := s.client.GetObject(ctx, s.bucket, hash, minio.GetObjectOptions{})
+	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket), Key: aws.String(s.key(hash)),
+	})
 	if err != nil {
-		return nil, 0, err
-	}
-	// GetObject chưa gửi request; Stat mới thật sự hỏi MinIO object có tồn tại không.
-	info, err := obj.Stat()
-	if err != nil {
-		obj.Close()
 		if isNotFound(err) {
 			return nil, 0, ErrNotFound
 		}
 		return nil, 0, err
 	}
-	return obj, info.Size, nil
+	return out.Body, aws.ToInt64(out.ContentLength), nil
 }
 
 func (s *S3Store) Has(ctx context.Context, hash string) bool {
 	if !validHash(hash) {
 		return false
 	}
-	_, err := s.client.StatObject(ctx, s.bucket, hash, minio.StatObjectOptions{})
+	_, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(s.bucket), Key: aws.String(s.key(hash)),
+	})
 	return err == nil
 }
 
@@ -136,18 +193,25 @@ func (s *S3Store) Delete(ctx context.Context, hash string) error {
 	if !validHash(hash) {
 		return fmt.Errorf("%w: %q", ErrInvalidHash, hash)
 	}
-	info, err := s.client.StatObject(ctx, s.bucket, hash, minio.StatObjectOptions{})
+	// S3 xóa object không tồn tại vẫn trả thành công, nên hỏi trước để biết
+	// kích thước và để trả ErrNotFound giống DiskStore.
+	head, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(s.bucket), Key: aws.String(s.key(hash)),
+	})
 	if err != nil {
 		if isNotFound(err) {
 			return ErrNotFound
 		}
 		return err
 	}
-	if err := s.client.RemoveObject(ctx, s.bucket, hash, minio.RemoveObjectOptions{}); err != nil {
+	_, err = s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(s.bucket), Key: aws.String(s.key(hash)),
+	})
+	if err != nil {
 		return err
 	}
 	s.mu.Lock()
-	s.used -= info.Size
+	s.used -= aws.ToInt64(head.ContentLength)
 	s.count--
 	s.mu.Unlock()
 	return nil
@@ -155,12 +219,18 @@ func (s *S3Store) Delete(ctx context.Context, hash string) error {
 
 func (s *S3Store) List(ctx context.Context) ([]string, error) {
 	var hashes []string
-	for obj := range s.client.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{Recursive: true}) {
-		if obj.Err != nil {
-			return nil, obj.Err
+	pages := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
+		Bucket: aws.String(s.bucket), Prefix: aws.String(s.prefix),
+	})
+	for pages.HasMorePages() {
+		page, err := pages.NextPage(ctx)
+		if err != nil {
+			return nil, err
 		}
-		if validHash(obj.Key) {
-			hashes = append(hashes, obj.Key)
+		for _, obj := range page.Contents {
+			if hash := strings.TrimPrefix(aws.ToString(obj.Key), s.prefix); validHash(hash) {
+				hashes = append(hashes, hash)
+			}
 		}
 	}
 	return hashes, nil
@@ -172,7 +242,16 @@ func (s *S3Store) Stats() (used int64, count int) {
 	return s.used, s.count
 }
 
+// isNotFound nhận ra lỗi "không có": GetObject trả NoSuchKey, còn HeadObject và
+// HeadBucket trả NotFound/NoSuchBucket vì response của HEAD không có body.
 func isNotFound(err error) bool {
-	code := minio.ToErrorResponse(err).Code
-	return code == "NoSuchKey" || code == "NoSuchObject"
+	var apiErr smithy.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	switch apiErr.ErrorCode() {
+	case "NoSuchKey", "NotFound", "NoSuchBucket":
+		return true
+	}
+	return false
 }

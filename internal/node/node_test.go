@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -13,7 +15,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/minio/minio-go/v7"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 
 	"dstore-demo/internal/ec"
 )
@@ -46,25 +50,28 @@ func backends(t *testing.T) []backend {
 		},
 	}}
 
+	// Khóa và region đọc từ AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY/AWS_REGION
+	// như khi chạy thật; DSTORE_TEST_S3_ENDPOINT để trống nghĩa là không test S3.
 	endpoint := os.Getenv("DSTORE_TEST_S3_ENDPOINT")
 	if endpoint == "" {
-		t.Log("bỏ qua backend MinIO: chưa đặt DSTORE_TEST_S3_ENDPOINT")
+		t.Log("bỏ qua backend S3: chưa đặt DSTORE_TEST_S3_ENDPOINT")
 		return list
 	}
 	return append(list, backend{
-		name: "minio",
+		name: "s3",
 		open: func(t *testing.T) (ShardStore, func() ShardStore) {
 			cfg := S3Config{
-				Endpoint:  endpoint,
-				AccessKey: os.Getenv("DSTORE_TEST_S3_ACCESS_KEY"),
-				SecretKey: os.Getenv("DSTORE_TEST_S3_SECRET_KEY"),
-				Bucket:    "test-" + randomHex(6), // mỗi test một bucket riêng
+				Endpoint:     endpoint,
+				UsePathStyle: true,
+				CreateBucket: true,
+				Bucket:       "dstore-test",
+				Prefix:       "test-" + randomHex(6) + "/", // mỗi test một prefix riêng
 			}
 			store, err := NewS3Store(context.Background(), cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Cleanup(func() { removeBucket(store) })
+			t.Cleanup(func() { removePrefix(store) })
 			return store, func() ShardStore {
 				s, err := NewS3Store(context.Background(), cfg)
 				if err != nil {
@@ -76,12 +83,12 @@ func backends(t *testing.T) []backend {
 	})
 }
 
-func removeBucket(s *S3Store) {
+func removePrefix(s *S3Store) {
 	ctx := context.Background()
-	for obj := range s.client.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{Recursive: true}) {
-		s.client.RemoveObject(ctx, s.bucket, obj.Key, minio.RemoveObjectOptions{})
+	hashes, _ := s.List(ctx)
+	for _, h := range hashes {
+		s.Delete(ctx, h)
 	}
-	s.client.RemoveBucket(ctx, s.bucket)
 }
 
 func randomHex(n int) string {
@@ -233,6 +240,36 @@ func TestStoreRecountsAfterRestart(t *testing.T) {
 			rc.Close()
 			if size != int64(len(content)) || !bytes.Equal(got, content) {
 				t.Fatal("shard đọc lại sau restart không khớp")
+			}
+		})
+	}
+}
+
+// S3 phải tự kiểm SHA-256 phía server: gửi checksum không khớp nội dung thì bị
+// từ chối. Test này xác nhận điều S3Store.Put dựa vào, trên đúng dịch vụ đang dùng.
+func TestS3RejectsWrongChecksum(t *testing.T) {
+	for _, b := range backends(t) {
+		if b.name != "s3" {
+			continue
+		}
+		t.Run(b.name, func(t *testing.T) {
+			store, _ := b.open(t)
+			s3store := store.(*S3Store)
+
+			content := []byte("nội dung bị hỏng trên đường truyền")
+			wrong := sha256.Sum256([]byte("nội dung khác"))
+			_, err := s3store.client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket:            aws.String(s3store.bucket),
+				Key:               aws.String(s3store.key(ec.Hash(content))),
+				Body:              bytes.NewReader(content),
+				ChecksumAlgorithm: types.ChecksumAlgorithmSha256,
+				ChecksumSHA256:    aws.String(base64.StdEncoding.EncodeToString(wrong[:])),
+			})
+			if err == nil {
+				t.Fatal("S3 nhận object có checksum sai — không thể dựa vào kiểm tra phía server")
+			}
+			if store.Has(context.Background(), ec.Hash(content)) {
+				t.Fatal("object checksum sai vẫn được lưu")
 			}
 		})
 	}
