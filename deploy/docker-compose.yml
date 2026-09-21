@@ -1,0 +1,128 @@
+name: dstore-demo
+
+# Cấu hình chung cho 8 node; mỗi node chỉ khác NODE_ID, NODE_ADDR và volume.
+x-node: &node
+  image: dstore-demo:latest
+  build:
+    context: ..
+  restart: unless-stopped
+  depends_on:
+    - coordinator
+  environment: &node-env
+    COORDINATOR_URL: http://coordinator:9000
+    DATA_DIR: /data
+    LISTEN_ADDR: ":8080"
+    CAPACITY_BYTES: "536870912" # 512 MB mỗi node
+    HEARTBEAT_INTERVAL: 5s
+  command: ["/app/node"]
+
+services:
+  coordinator:
+    image: dstore-demo:latest
+    build:
+      context: ..
+    container_name: coordinator
+    command: ["/app/coordinator"]
+    environment:
+      LISTEN_ADDR: ":9000"
+      HEALTH_INTERVAL: 5s
+      HEARTBEAT_TIMEOUT: 20s
+      REPAIR_INTERVAL: 10s
+    ports:
+      - "9000:9000" # để xem API từ máy host, ví dụ curl localhost:9000/nodes
+
+  node-1:
+    <<: *node
+    container_name: node-1
+    environment:
+      <<: *node-env
+      NODE_ID: node-1
+      NODE_ADDR: http://node-1:8080
+    volumes: ["node-1-data:/data"]
+
+  node-2:
+    <<: *node
+    container_name: node-2
+    environment:
+      <<: *node-env
+      NODE_ID: node-2
+      NODE_ADDR: http://node-2:8080
+    volumes: ["node-2-data:/data"]
+
+  node-3:
+    <<: *node
+    container_name: node-3
+    environment:
+      <<: *node-env
+      NODE_ID: node-3
+      NODE_ADDR: http://node-3:8080
+    volumes: ["node-3-data:/data"]
+
+  node-4:
+    <<: *node
+    container_name: node-4
+    environment:
+      <<: *node-env
+      NODE_ID: node-4
+      NODE_ADDR: http://node-4:8080
+    volumes: ["node-4-data:/data"]
+
+  node-5:
+    <<: *node
+    container_name: node-5
+    environment:
+      <<: *node-env
+      NODE_ID: node-5
+      NODE_ADDR: http://node-5:8080
+    volumes: ["node-5-data:/data"]
+
+  node-6:
+    <<: *node
+    container_name: node-6
+    environment:
+      <<: *node-env
+      NODE_ID: node-6
+      NODE_ADDR: http://node-6:8080
+    volumes: ["node-6-data:/data"]
+
+  node-7:
+    <<: *node
+    container_name: node-7
+    environment:
+      <<: *node-env
+      NODE_ID: node-7
+      NODE_ADDR: http://node-7:8080
+    volumes: ["node-7-data:/data"]
+
+  node-8:
+    <<: *node
+    container_name: node-8
+    environment:
+      <<: *node-env
+      NODE_ID: node-8
+      NODE_ADDR: http://node-8:8080
+    volumes: ["node-8-data:/data"]
+
+  # dsctl phải chạy trong mạng Docker vì nó nói chuyện thẳng với node
+  # qua tên container (http://node-1:8080). Chạy bằng:
+  #   docker compose run --rm dsctl put /work/video.mp4
+  dsctl:
+    image: dstore-demo:latest
+    build:
+      context: ..
+    profiles: ["cli"] # không tự khởi động cùng `docker compose up`
+    user: "${DOCKER_USER:-1000:1000}"
+    entrypoint: ["/app/dsctl", "-coordinator", "http://coordinator:9000"]
+    working_dir: /work
+    volumes:
+      - ./work:/work # đặt file cần upload vào deploy/work/
+
+volumes:
+  node-1-data:
+  node-2-data:
+  node-3-data:
+  node-4-data:
+  node-5-data:
+  node-6-data:
+  node-7-data:
+  node-8-data:
