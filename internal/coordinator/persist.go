@@ -35,6 +35,13 @@ type MetaStore interface {
 	DeleteFile(ctx context.Context, fileID string) error
 	// Load đọc lại mọi thứ khi coordinator khởi động.
 	Load(ctx context.Context) ([]NodeRecord, []FileRecord, error)
+
+	// SaveSettings/LoadSettings lưu Settings sửa qua web UI dưới dạng JSON.
+	// LoadSettings trả nil khi chưa từng lưu.
+	SaveSettings(ctx context.Context, data []byte) error
+	LoadSettings(ctx context.Context) ([]byte, error)
+	// Ping kiểm tra DB còn trả lời, để web UI hiện tình trạng kết nối.
+	Ping(ctx context.Context) error
 }
 
 type NodeRecord struct {
@@ -143,9 +150,10 @@ func commitRecord(f *File, segments []protocol.CommitSegment) (FileRecord, error
 // MemoryMeta giữ bản ghi trong RAM: dùng cho test, và khi chạy không có DB
 // (restart là mất metadata, như bản đầu tiên của demo).
 type MemoryMeta struct {
-	mu    sync.Mutex
-	nodes map[string]NodeRecord
-	files map[string]FileRecord
+	mu       sync.Mutex
+	nodes    map[string]NodeRecord
+	files    map[string]FileRecord
+	settings []byte
 }
 
 func NewMemoryMeta() *MemoryMeta {
@@ -204,6 +212,21 @@ func (m *MemoryMeta) Load(_ context.Context) ([]NodeRecord, []FileRecord, error)
 	}
 	return nodes, files, nil
 }
+
+func (m *MemoryMeta) SaveSettings(_ context.Context, data []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.settings = append([]byte(nil), data...)
+	return nil
+}
+
+func (m *MemoryMeta) LoadSettings(_ context.Context) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]byte(nil), m.settings...), nil
+}
+
+func (m *MemoryMeta) Ping(context.Context) error { return nil }
 
 // cloneFile sao chép sâu để bản ghi trong MemoryMeta không dùng chung slice
 // với bên ngoài — giống như dữ liệu đi qua DB thật.

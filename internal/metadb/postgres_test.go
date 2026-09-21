@@ -8,6 +8,7 @@ import (
 
 	"dstore-demo/internal/coordinator"
 	"dstore-demo/internal/pgdb/pgtest"
+	"dstore-demo/internal/protocol"
 )
 
 func openTestDB(t *testing.T) *Postgres {
@@ -123,5 +124,39 @@ func TestDeleteCascades(t *testing.T) {
 	db.pool.QueryRow(ctx, `SELECT count(*) FROM shards WHERE file_id = 'f1'`).Scan(&orphans)
 	if orphans != 0 {
 		t.Fatalf("còn %d shard mồ côi của file đã xóa", orphans)
+	}
+}
+
+// Settings sửa qua UI phải còn sau restart; lần lưu sau thay lần trước.
+func TestSettingsRoundTrip(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	data, err := db.LoadSettings(ctx)
+	if err != nil || data != nil {
+		t.Fatalf("DB mới mà LoadSettings = %q, %v; mong đợi nil", data, err)
+	}
+
+	defaults := coordinator.Settings{HeartbeatTimeout: protocol.Duration(20 * time.Second), GCGrace: protocol.Duration(time.Minute)}
+	first := coordinator.NewSettingsStore(db, defaults)
+	for _, v := range []coordinator.Settings{
+		{HeartbeatTimeout: protocol.Duration(30 * time.Second), GCGrace: protocol.Duration(time.Minute)},
+		{HeartbeatTimeout: protocol.Duration(45 * time.Second), GCGrace: protocol.Duration(5 * time.Minute), RepairPaused: true},
+	} {
+		if err := first.Update(ctx, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	again := coordinator.NewSettingsStore(db, defaults)
+	found, err := again.Load(ctx)
+	if err != nil || !found {
+		t.Fatalf("Load = %v, %v", found, err)
+	}
+	if got := again.Get(); got != first.Get() {
+		t.Fatalf("sau restart settings = %+v, mong đợi %+v", got, first.Get())
+	}
+	if err := db.Ping(ctx); err != nil {
+		t.Fatal(err)
 	}
 }

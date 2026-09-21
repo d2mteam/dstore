@@ -16,19 +16,26 @@ import (
 // Rủi ro duy nhất là xóa nhầm shard đang upload: client PUT shard lên node
 // *trước khi* commit, nên trong khoảng đó coordinator chưa biết hash và shard
 // trông y hệt shard mồ côi. Vì vậy một shard phải bị thấy là mồ côi liên tục
-// suốt Grace rồi mới bị xóa; Grace cần lớn hơn thời gian upload một file.
+// suốt GCGrace (trong Settings) rồi mới bị xóa; GCGrace cần lớn hơn thời gian
+// upload một file.
 type Collector struct {
 	Store    *Store
 	Shards   *shardclient.Client
+	Settings *SettingsStore // GCGrace và GCPaused đọc lại mỗi lượt
 	Interval time.Duration
-	Grace    time.Duration
 	Metrics  *Metrics
 	Log      *slog.Logger
+
+	now trigger
 
 	mu sync.Mutex
 	// suspects[nodeID][hash] = lần đầu thấy shard này mồ côi.
 	suspects map[string]map[string]time.Time
 }
+
+// Trigger yêu cầu GC chạy một lượt ngay, kể cả khi đang tạm dừng. Grace vẫn
+// được tôn trọng: shard mới thấy mồ côi lần đầu chỉ bị ghi nhận, chưa bị xóa.
+func (c *Collector) Trigger() { c.now.Fire() }
 
 func (c *Collector) Run(ctx context.Context) {
 	ticker := time.NewTicker(c.Interval)
@@ -38,6 +45,11 @@ func (c *Collector) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if c.Settings.Get().GCPaused {
+				continue
+			}
+			c.RunOnce(ctx)
+		case <-c.now.C():
 			c.RunOnce(ctx)
 		}
 	}
@@ -45,17 +57,19 @@ func (c *Collector) Run(ctx context.Context) {
 
 // RunOnce quét mọi node online một lượt, trả về số shard đã xóa.
 func (c *Collector) RunOnce(ctx context.Context) int {
+	defer c.Metrics.GCRan()
+	grace := time.Duration(c.Settings.Get().GCGrace)
 	deleted := 0
 	for _, node := range c.Store.OnlineNodes() {
 		if ctx.Err() != nil {
 			return deleted
 		}
-		deleted += c.collectNode(ctx, node.ID, node.Addr)
+		deleted += c.collectNode(ctx, node.ID, node.Addr, grace)
 	}
 	return deleted
 }
 
-func (c *Collector) collectNode(ctx context.Context, nodeID, addr string) int {
+func (c *Collector) collectNode(ctx context.Context, nodeID, addr string, grace time.Duration) int {
 	onDisk, err := c.Shards.List(ctx, addr)
 	if err != nil {
 		c.Log.Warn("không liệt kê được shard của node", "node", nodeID, "err", err)
@@ -76,7 +90,7 @@ func (c *Collector) collectNode(ctx context.Context, nodeID, addr string) int {
 		if !wasSuspect {
 			firstSeen = now // lần đầu thấy: ghi nhận rồi để lượt sau xử lý
 		}
-		if now.Sub(firstSeen) < c.Grace {
+		if now.Sub(firstSeen) < grace {
 			next[hash] = firstSeen
 			continue
 		}

@@ -39,3 +39,11 @@ CREATE TABLE IF NOT EXISTS shards (
 
 -- "Shard nào nằm trên node X" — câu hỏi repair và dọn rác cần trả lời.
 CREATE INDEX IF NOT EXISTS shards_node_id ON shards (node_id);
+
+-- Tham số vận hành sửa qua web UI (xem internal/coordinator/settings.go). Chỉ có
+-- đúng một dòng; lưu JSON để thêm tham số mới không phải đổi bảng.
+CREATE TABLE IF NOT EXISTS settings (
+    id          INT PRIMARY KEY CHECK (id = 1),
+    data        JSONB       NOT NULL,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);

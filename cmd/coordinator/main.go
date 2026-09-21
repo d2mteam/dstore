@@ -13,6 +13,7 @@ import (
 	"dstore-demo/internal/coordinator"
 	"dstore-demo/internal/metadb"
 	"dstore-demo/internal/pgdb"
+	"dstore-demo/internal/protocol"
 	"dstore-demo/internal/shardclient"
 )
 
@@ -20,18 +21,17 @@ func main() {
 	log := slog.New(slog.NewTextHandler(os.Stdout, nil)).With("svc", "coordinator")
 
 	var (
-		listen        = env("LISTEN_ADDR", ":9000")
-		healthEvery   = envDuration("HEALTH_INTERVAL", 5*time.Second)
-		healthTimeout = envDuration("HEARTBEAT_TIMEOUT", 20*time.Second)
-		repairEvery   = envDuration("REPAIR_INTERVAL", 10*time.Second)
-		gcEvery       = envDuration("GC_INTERVAL", 60*time.Second)
-		gcGrace       = envDuration("GC_GRACE", 2*time.Minute)
+		listen      = env("LISTEN_ADDR", ":9000")
+		dbURL       = env("DATABASE_URL", "")
+		healthEvery = envDuration("HEALTH_INTERVAL", 5*time.Second)
+		repairEvery = envDuration("REPAIR_INTERVAL", 10*time.Second)
+		gcEvery     = envDuration("GC_INTERVAL", 60*time.Second)
 	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	meta, closeMeta, err := openMetaStore(ctx, env("DATABASE_URL", ""), log)
+	meta, closeMeta, err := openMetaStore(ctx, dbURL, log)
 	if err != nil {
 		log.Error("không kết nối được DB metadata", "err", err)
 		os.Exit(1)
@@ -46,20 +46,42 @@ func main() {
 		os.Exit(1)
 	}
 	log.Info("đã khôi phục metadata", "nodes", nodes, "files", files)
+
+	// Tham số vận hành: env là mặc định, bản đã sửa qua web UI (lưu trong DB) đè lên.
+	settings := coordinator.NewSettingsStore(meta, coordinator.Settings{
+		HeartbeatTimeout: protocol.Duration(envDuration("HEARTBEAT_TIMEOUT", 20*time.Second)),
+		GCGrace:          protocol.Duration(envDuration("GC_GRACE", 2*time.Minute)),
+	})
+	found, err := settings.Load(ctx)
+	if err != nil {
+		log.Error("không đọc được settings", "err", err)
+		os.Exit(1)
+	}
+	cur := settings.Get()
+	if found {
+		log.Info("dùng settings đã lưu từ web UI thay cho env", "settings", cur)
+	}
+	if cur.RepairPaused {
+		log.Warn("repair tự động đang TẠM DỪNG (đặt từ web UI): shard mất sẽ không được tái tạo")
+	}
+	if cur.GCPaused {
+		log.Warn("GC tự động đang TẠM DỪNG (đặt từ web UI)")
+	}
+
 	placer := coordinator.NewPlacer(store)
 	shards := shardclient.New(30 * time.Second)
 
 	health := &coordinator.HealthMonitor{
-		Store: store, Shards: shards,
-		Interval: healthEvery, Timeout: healthTimeout, Metrics: metrics, Log: log,
+		Store: store, Shards: shards, Settings: settings,
+		Interval: healthEvery, Metrics: metrics, Log: log,
 	}
 	repairer := &coordinator.Repairer{
-		Store: store, Placer: placer, Shards: shards,
+		Store: store, Placer: placer, Shards: shards, Settings: settings,
 		Interval: repairEvery, Metrics: metrics, Log: log,
 	}
 	collector := &coordinator.Collector{
-		Store: store, Shards: shards,
-		Interval: gcEvery, Grace: gcGrace, Metrics: metrics, Log: log,
+		Store: store, Shards: shards, Settings: settings,
+		Interval: gcEvery, Metrics: metrics, Log: log,
 	}
 	api := &coordinator.Server{
 		Store: store, Placer: placer, Health: health, Shards: shards, Metrics: metrics, Log: log,
@@ -72,8 +94,8 @@ func main() {
 	srv := &http.Server{Addr: listen, Handler: api.Routes()}
 	go func() {
 		log.Info("coordinator nghe HTTP", "listen", listen,
-			"heartbeat_timeout", healthTimeout, "repair_interval", repairEvery,
-			"gc_interval", gcEvery, "gc_grace", gcGrace)
+			"heartbeat_timeout", cur.HeartbeatTimeout, "repair_interval", repairEvery,
+			"gc_interval", gcEvery, "gc_grace", cur.GCGrace)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error("HTTP server dừng", "err", err)
 			stop()

@@ -35,8 +35,10 @@ func newGCFixture(t *testing.T, grace time.Duration) *gcFixture {
 	srv := httptest.NewServer((&node.Server{ID: "node-1", Store: disk, Log: log}).Routes())
 	t.Cleanup(srv.Close)
 
-	store := coordinator.NewStore(coordinator.NewMemoryMeta())
+	meta := coordinator.NewMemoryMeta()
+	store := coordinator.NewStore(meta)
 	store.RegisterNode(context.Background(), "node-1", srv.URL, 1<<30)
+	settings := coordinator.NewSettingsStore(meta, coordinator.Settings{GCGrace: protocol.Duration(grace)})
 
 	return &gcFixture{
 		t:     t,
@@ -44,8 +46,8 @@ func newGCFixture(t *testing.T, grace time.Duration) *gcFixture {
 		disk:  disk,
 		addr:  srv.URL,
 		gc: &coordinator.Collector{
-			Store: store, Shards: shardclient.New(5 * time.Second),
-			Interval: time.Hour, Grace: grace, Log: log,
+			Store: store, Shards: shardclient.New(5 * time.Second), Settings: settings,
+			Interval: time.Hour, Log: log,
 		},
 	}
 }

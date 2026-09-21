@@ -18,10 +18,16 @@ type Repairer struct {
 	Store    *Store
 	Placer   *Placer
 	Shards   *shardclient.Client
+	Settings *SettingsStore // RepairPaused đọc lại mỗi nhịp
 	Interval time.Duration
 	Metrics  *Metrics
 	Log      *slog.Logger
+
+	now trigger
 }
+
+// Trigger yêu cầu repair chạy một lượt ngay, kể cả khi đang tạm dừng.
+func (r *Repairer) Trigger() { r.now.Fire() }
 
 func (r *Repairer) Run(ctx context.Context) {
 	ticker := time.NewTicker(r.Interval)
@@ -31,6 +37,11 @@ func (r *Repairer) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if r.Settings.Get().RepairPaused {
+				continue
+			}
+			r.RunOnce(ctx)
+		case <-r.now.C():
 			r.RunOnce(ctx)
 		}
 	}
@@ -38,6 +49,7 @@ func (r *Repairer) Run(ctx context.Context) {
 
 // RunOnce sửa tất cả segment đang thiếu shard, segment yếu nhất trước.
 func (r *Repairer) RunOnce(ctx context.Context) {
+	defer r.Metrics.RepairRan()
 	for _, seg := range r.Store.DegradedSegments() {
 		if ctx.Err() != nil {
 			return

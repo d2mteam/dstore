@@ -48,12 +48,17 @@ func Start(t *testing.T, nodeCount int) *Cluster {
 	t.Helper()
 	log := slog.New(slog.DiscardHandler)
 
-	store := coordinator.NewStore(coordinator.NewMemoryMeta())
+	meta := coordinator.NewMemoryMeta()
+	store := coordinator.NewStore(meta)
+	settings := coordinator.NewSettingsStore(meta, coordinator.Settings{
+		HeartbeatTimeout: protocol.Duration(HeartbeatDead),
+		GCGrace:          protocol.Duration(time.Hour),
+	})
 	placer := coordinator.NewPlacer(store)
 	shards := shardclient.New(5 * time.Second)
 	health := &coordinator.HealthMonitor{
-		Store: store, Shards: shards,
-		Interval: HeartbeatEvery, Timeout: HeartbeatDead, Log: log,
+		Store: store, Shards: shards, Settings: settings,
+		Interval: HeartbeatEvery, Log: log,
 	}
 	api := &coordinator.Server{Store: store, Placer: placer, Health: health, Shards: shards, Log: log}
 
@@ -68,7 +73,7 @@ func Start(t *testing.T, nodeCount int) *Cluster {
 		URL:   srv.URL,
 		Store: store,
 		Repairer: &coordinator.Repairer{
-			Store: store, Placer: placer, Shards: shards,
+			Store: store, Placer: placer, Shards: shards, Settings: settings,
 			Interval: time.Hour, Log: log,
 		},
 		t:     t,

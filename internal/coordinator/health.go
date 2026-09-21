@@ -12,8 +12,8 @@ import (
 type HealthMonitor struct {
 	Store    *Store
 	Shards   *shardclient.Client
-	Interval time.Duration // tần suất quét, demo: 5s
-	Timeout  time.Duration // quá hạn này không heartbeat thì coi là chết, demo: 20s
+	Settings *SettingsStore // HeartbeatTimeout đọc lại mỗi lượt quét
+	Interval time.Duration  // tần suất quét, demo: 5s
 	Metrics  *Metrics
 	Log      *slog.Logger
 }
@@ -26,7 +26,8 @@ func (h *HealthMonitor) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			for _, id := range h.Store.ExpiredNodes(h.Timeout) {
+			timeout := time.Duration(h.Settings.Get().HeartbeatTimeout)
+			for _, id := range h.Store.ExpiredNodes(timeout) {
 				lost := h.Store.MarkOffline(id)
 				h.Metrics.NodeLost()
 				h.Log.Warn("node mất heartbeat -> offline", "node", id, "shard_lost", lost)

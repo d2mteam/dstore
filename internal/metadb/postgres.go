@@ -4,6 +4,7 @@ package metadb
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -161,6 +162,27 @@ func (p *Postgres) Load(ctx context.Context) ([]coordinator.NodeRecord, []coordi
 		out = append(out, *files[id])
 	}
 	return nodes, out, nil
+}
+
+func (p *Postgres) SaveSettings(ctx context.Context, data []byte) error {
+	_, err := p.pool.Exec(ctx, `
+		INSERT INTO settings (id, data) VALUES (1, $1)
+		ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = now()`,
+		data)
+	return err
+}
+
+func (p *Postgres) LoadSettings(ctx context.Context) ([]byte, error) {
+	var data []byte
+	err := p.pool.QueryRow(ctx, `SELECT data FROM settings WHERE id = 1`).Scan(&data)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return data, err
+}
+
+func (p *Postgres) Ping(ctx context.Context) error {
+	return p.pool.Ping(ctx)
 }
 
 func (p *Postgres) loadNodes(ctx context.Context) ([]coordinator.NodeRecord, error) {
