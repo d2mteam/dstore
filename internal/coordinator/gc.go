@@ -22,6 +22,7 @@ type Collector struct {
 	Shards   *shardclient.Client
 	Interval time.Duration
 	Grace    time.Duration
+	Metrics  *Metrics
 	Log      *slog.Logger
 
 	mu sync.Mutex
@@ -89,6 +90,7 @@ func (c *Collector) collectNode(ctx context.Context, nodeID, addr string) int {
 
 	c.setSuspects(nodeID, next)
 	if deleted > 0 {
+		c.Metrics.OrphansDeleted(deleted)
 		c.Log.Info("đã dọn shard mồ côi", "node", nodeID, "da_xoa", deleted, "con_theo_doi", len(next))
 	}
 	return deleted

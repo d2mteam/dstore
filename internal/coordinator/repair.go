@@ -18,6 +18,7 @@ type Repairer struct {
 	Placer   *Placer
 	Shards   *shardclient.Client
 	Interval time.Duration
+	Metrics  *Metrics
 	Log      *slog.Logger
 }
 
@@ -48,6 +49,7 @@ func (r *Repairer) RunOnce(ctx context.Context) {
 			continue
 		}
 		if err := r.repairSegment(ctx, seg); err != nil {
+			r.Metrics.RepairFailed()
 			r.Log.Warn("repair segment thất bại",
 				"file", seg.FileID, "segment", seg.SegIndex, "err", err)
 		}
@@ -115,6 +117,7 @@ func (r *Repairer) repairSegment(ctx context.Context, seg SegmentRef) error {
 		if err := r.Store.ReplaceShard(seg.FileID, seg.SegIndex, shardIndex, hash, target.ID); err != nil {
 			return err
 		}
+		r.Metrics.RepairedShard()
 		r.Log.Info("đã tái tạo shard",
 			"file", seg.FileID, "segment", seg.SegIndex, "shard", shardIndex, "node_moi", target.ID)
 	}

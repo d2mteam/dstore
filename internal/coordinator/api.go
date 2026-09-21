@@ -15,11 +15,12 @@ import (
 
 // Server là HTTP API của control plane.
 type Server struct {
-	Store  *Store
-	Placer *Placer
-	Health *HealthMonitor
-	Shards *shardclient.Client
-	Log    *slog.Logger
+	Store   *Store
+	Placer  *Placer
+	Health  *HealthMonitor
+	Shards  *shardclient.Client
+	Metrics *Metrics
+	Log     *slog.Logger
 }
 
 func (s *Server) Routes() http.Handler {
@@ -33,10 +34,16 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /files/{id}", s.getManifest)
 	mux.HandleFunc("GET /files", s.listFiles)
 	mux.HandleFunc("DELETE /files/{id}", s.deleteFile)
+	mux.HandleFunc("GET /metrics", s.metrics)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	return mux
+}
+
+func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	s.WriteMetrics(w)
 }
 
 // --- Node ---

@@ -26,24 +26,25 @@ func main() {
 		gcGrace       = envDuration("GC_GRACE", 2*time.Minute)
 	)
 
+	metrics := &coordinator.Metrics{}
 	store := coordinator.NewStore()
 	placer := coordinator.NewPlacer(store)
 	shards := shardclient.New(30 * time.Second)
 
 	health := &coordinator.HealthMonitor{
 		Store: store, Shards: shards,
-		Interval: healthEvery, Timeout: healthTimeout, Log: log,
+		Interval: healthEvery, Timeout: healthTimeout, Metrics: metrics, Log: log,
 	}
 	repairer := &coordinator.Repairer{
 		Store: store, Placer: placer, Shards: shards,
-		Interval: repairEvery, Log: log,
+		Interval: repairEvery, Metrics: metrics, Log: log,
 	}
 	collector := &coordinator.Collector{
 		Store: store, Shards: shards,
-		Interval: gcEvery, Grace: gcGrace, Log: log,
+		Interval: gcEvery, Grace: gcGrace, Metrics: metrics, Log: log,
 	}
 	api := &coordinator.Server{
-		Store: store, Placer: placer, Health: health, Shards: shards, Log: log,
+		Store: store, Placer: placer, Health: health, Shards: shards, Metrics: metrics, Log: log,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
