@@ -1,5 +1,3 @@
-// Package coordinator là control plane: giữ registry node, metadata file/shard,
-// phát hiện node chết và chạy repair.
 package coordinator
 
 import (
@@ -11,9 +9,9 @@ import (
 	"dstore-demo/internal/protocol"
 )
 
-// Demo dùng map trong bộ nhớ thay cho SQLite: đủ cho một coordinator,
-// đổi sang SQLite sau này chỉ cần thay các phương thức của Store.
-
+// Node là một node theo góc nhìn của coordinator. ID, Addr, Capacity là trạng
+// thái cứng (lưu DB); Used, ShardCount, Status, LastHeartbeat là trạng thái mềm,
+// cập nhật qua heartbeat.
 type Node struct {
 	ID            string
 	Addr          string
@@ -24,8 +22,11 @@ type Node struct {
 	LastHeartbeat time.Time
 }
 
+// Free là dung lượng còn trống theo số liệu heartbeat gần nhất.
 func (n *Node) Free() int64 { return n.Capacity - n.Used }
 
+// Shard là một shard của một segment: nằm trên node nào, hash là gì, còn khỏe
+// (protocol.ShardOK) hay đã mất (protocol.ShardLost).
 type Shard struct {
 	Index  int // shard_index: Reed-Solomon cần biết đây là shard số mấy
 	Hash   string
@@ -33,6 +34,7 @@ type Shard struct {
 	Status string
 }
 
+// Segment là một đoạn cố định của file (mặc định 4 MB), mã hóa thành k+m shard.
 type Segment struct {
 	Index    int
 	OrigSize int // kích thước trước khi Split đệm; cần cho Join
@@ -50,6 +52,8 @@ func (s *Segment) OKCount() int {
 	return n
 }
 
+// File là metadata một file. File được tạo lúc lập kế hoạch upload nhưng chỉ
+// đọc được và chỉ được lưu DB sau khi commit.
 type File struct {
 	ID          string
 	Name        string
@@ -63,6 +67,10 @@ type File struct {
 	Segments    []*Segment
 }
 
+// Store giữ toàn bộ metadata của coordinator trong RAM, dùng chung giữa API và
+// các vòng nền, an toàn khi gọi đồng thời. Thay đổi trạng thái cứng được ghi qua
+// MetaStore; ghi DB luôn nằm ngoài khóa để một lần ghi chậm không chặn mọi
+// request khác.
 type Store struct {
 	mu    sync.RWMutex
 	nodes map[string]*Node
@@ -70,6 +78,7 @@ type Store struct {
 	meta  MetaStore // nơi lưu bền trạng thái cứng, xem persist.go
 }
 
+// NewStore tạo Store rỗng; gọi Load để nạp lại metadata đã lưu.
 func NewStore(meta MetaStore) *Store {
 	return &Store{
 		nodes: make(map[string]*Node),
@@ -121,6 +130,7 @@ func (s *Store) Heartbeat(id string, used int64, shardCount int) bool {
 	return true
 }
 
+// Node trả bản sao của một node.
 func (s *Store) Node(id string) (Node, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

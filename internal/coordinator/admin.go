@@ -36,6 +36,8 @@ type StartupInfo struct {
 	StartedAt      time.Time         `json:"started_at"`
 }
 
+// Routes trả handler cho các đường dẫn /ui/api/...; đường dẫn giữ nguyên tiền
+// tố, không bị cắt.
 func (a *Admin) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /ui/api/overview", a.overview)

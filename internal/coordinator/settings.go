@@ -46,6 +46,8 @@ type SettingsStore struct {
 	cur Settings
 }
 
+// NewSettingsStore tạo SettingsStore với giá trị ban đầu defaults (thường lấy
+// từ env); gọi Load để đè bằng bản đã lưu trong meta.
 func NewSettingsStore(meta MetaStore, defaults Settings) *SettingsStore {
 	return &SettingsStore{meta: meta, cur: defaults}
 }
@@ -70,6 +72,7 @@ func (s *SettingsStore) Load(ctx context.Context) (found bool, err error) {
 	return true, nil
 }
 
+// Get trả Settings đang có hiệu lực.
 func (s *SettingsStore) Get() Settings {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

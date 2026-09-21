@@ -44,12 +44,15 @@ type MetaStore interface {
 	Ping(ctx context.Context) error
 }
 
+// NodeRecord là node như lưu trong DB: chỉ địa chỉ và dung lượng, không có
+// trạng thái sống/chết.
 type NodeRecord struct {
 	ID       string
 	Addr     string
 	Capacity int64
 }
 
+// FileRecord là một file đã commit như lưu trong DB, kèm mọi segment và shard.
 type FileRecord struct {
 	ID          string
 	Name        string
@@ -60,12 +63,14 @@ type FileRecord struct {
 	Segments    []SegmentRecord
 }
 
+// SegmentRecord là một segment trong FileRecord; Segments[i] luôn có Index == i.
 type SegmentRecord struct {
 	Index    int
 	OrigSize int
 	Shards   []ShardRecord
 }
 
+// ShardRecord là vị trí một shard: shard_index nào, hash nào, trên node nào.
 type ShardRecord struct {
 	Index  int
 	Hash   string
@@ -156,10 +161,12 @@ type MemoryMeta struct {
 	settings []byte
 }
 
+// NewMemoryMeta tạo MemoryMeta rỗng.
 func NewMemoryMeta() *MemoryMeta {
 	return &MemoryMeta{nodes: make(map[string]NodeRecord), files: make(map[string]FileRecord)}
 }
 
+// SaveNode ghi đè bản ghi node cùng ID.
 func (m *MemoryMeta) SaveNode(_ context.Context, n NodeRecord) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -167,6 +174,7 @@ func (m *MemoryMeta) SaveNode(_ context.Context, n NodeRecord) error {
 	return nil
 }
 
+// SaveFile lưu bản sao sâu của file, thay bản cũ nếu có.
 func (m *MemoryMeta) SaveFile(_ context.Context, f FileRecord) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -174,6 +182,7 @@ func (m *MemoryMeta) SaveFile(_ context.Context, f FileRecord) error {
 	return nil
 }
 
+// UpdateShard đổi vị trí một shard, thêm mới nếu segment chưa có shard_index đó.
 func (m *MemoryMeta) UpdateShard(_ context.Context, fileID string, segIndex, shardIndex int, hash, nodeID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -192,6 +201,7 @@ func (m *MemoryMeta) UpdateShard(_ context.Context, fileID string, segIndex, sha
 	return nil
 }
 
+// DeleteFile xóa file; không có file cũng không lỗi.
 func (m *MemoryMeta) DeleteFile(_ context.Context, fileID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -199,6 +209,7 @@ func (m *MemoryMeta) DeleteFile(_ context.Context, fileID string) error {
 	return nil
 }
 
+// Load trả bản sao mọi node và file, theo thứ tự bất kỳ.
 func (m *MemoryMeta) Load(_ context.Context) ([]NodeRecord, []FileRecord, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -213,6 +224,7 @@ func (m *MemoryMeta) Load(_ context.Context) ([]NodeRecord, []FileRecord, error)
 	return nodes, files, nil
 }
 
+// SaveSettings giữ bản sao của JSON settings.
 func (m *MemoryMeta) SaveSettings(_ context.Context, data []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -220,12 +232,14 @@ func (m *MemoryMeta) SaveSettings(_ context.Context, data []byte) error {
 	return nil
 }
 
+// LoadSettings trả JSON đã lưu, hoặc nil nếu chưa lưu lần nào.
 func (m *MemoryMeta) LoadSettings(_ context.Context) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]byte(nil), m.settings...), nil
 }
 
+// Ping luôn thành công: không có DB nào để mất kết nối.
 func (m *MemoryMeta) Ping(context.Context) error { return nil }
 
 // cloneFile sao chép sâu để bản ghi trong MemoryMeta không dùng chung slice

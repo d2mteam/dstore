@@ -29,6 +29,8 @@ type Repairer struct {
 // Trigger yêu cầu repair chạy một lượt ngay, kể cả khi đang tạm dừng.
 func (r *Repairer) Trigger() { r.now.Fire() }
 
+// Run chạy RunOnce mỗi Interval cho tới khi ctx bị hủy, bỏ qua nhịp nào
+// Settings.RepairPaused đang bật; lượt yêu cầu qua Trigger thì luôn chạy.
 func (r *Repairer) Run(ctx context.Context) {
 	ticker := time.NewTicker(r.Interval)
 	defer ticker.Stop()

@@ -18,6 +18,8 @@ type HealthMonitor struct {
 	Log      *slog.Logger
 }
 
+// Run quét mỗi Interval cho tới khi ctx bị hủy: node online quá HeartbeatTimeout
+// không heartbeat thì chuyển offline, shard của nó thành lost.
 func (h *HealthMonitor) Run(ctx context.Context) {
 	ticker := time.NewTicker(h.Interval)
 	defer ticker.Stop()

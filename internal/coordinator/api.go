@@ -24,6 +24,8 @@ type Server struct {
 	Log     *slog.Logger
 }
 
+// Routes trả handler của toàn bộ API control plane: /nodes/..., /files/...,
+// /metrics và /healthz.
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /nodes/register", s.registerNode)

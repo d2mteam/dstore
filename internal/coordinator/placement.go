@@ -13,9 +13,10 @@ type Placer struct {
 	store *Store
 }
 
+// NewPlacer tạo Placer chọn node từ danh sách node đang online trong s.
 func NewPlacer(s *Store) *Placer { return &Placer{store: s} }
 
-// Pick chọn count node **khác nhau**, đang online, không nằm trong exclude,
+// Pick chọn count node khác nhau, đang online, không nằm trong exclude,
 // còn đủ chỗ cho need byte. Ưu tiên node trống nhiều nhất, có xáo trộn nhẹ
 // để shard trải đều thay vì dồn hết vào một node.
 func (p *Placer) Pick(count int, need int64, exclude []string) ([]protocol.NodeRef, error) {

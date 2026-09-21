@@ -21,36 +21,42 @@ type Metrics struct {
 	lastGC         atomic.Int64
 }
 
+// RepairedShard đếm một shard đã được tái tạo và đặt lên node mới.
 func (m *Metrics) RepairedShard() {
 	if m != nil {
 		m.repairedShards.Add(1)
 	}
 }
 
+// RepairFailed đếm một lần repair một segment thất bại.
 func (m *Metrics) RepairFailed() {
 	if m != nil {
 		m.repairFailures.Add(1)
 	}
 }
 
+// OrphansDeleted cộng n shard mồ côi vừa bị GC xóa.
 func (m *Metrics) OrphansDeleted(n int) {
 	if m != nil {
 		m.orphansDeleted.Add(int64(n))
 	}
 }
 
+// NodeLost đếm một lần node bị chuyển offline vì mất heartbeat.
 func (m *Metrics) NodeLost() {
 	if m != nil {
 		m.nodesLost.Add(1)
 	}
 }
 
+// RepairRan ghi thời điểm vừa xong một lượt repair.
 func (m *Metrics) RepairRan() {
 	if m != nil {
 		m.lastRepair.Store(time.Now().UnixNano())
 	}
 }
 
+// GCRan ghi thời điểm vừa xong một lượt GC.
 func (m *Metrics) GCRan() {
 	if m != nil {
 		m.lastGC.Store(time.Now().UnixNano())
@@ -67,6 +73,7 @@ type Counters struct {
 	LastGC         time.Time `json:"last_gc,omitzero"`
 }
 
+// Snapshot đọc mọi bộ đếm cùng lúc; con trỏ nil thì trả Counters rỗng.
 func (m *Metrics) Snapshot() Counters {
 	if m == nil {
 		return Counters{}

@@ -1,4 +1,3 @@
-// Package metadb lưu metadata của coordinator trong PostgreSQL.
 package metadb
 
 import (
@@ -30,6 +29,7 @@ func New(pool *pgxpool.Pool) *Postgres {
 	return &Postgres{pool: pool}
 }
 
+// SaveNode thêm node, hoặc cập nhật địa chỉ và dung lượng nếu node đã có.
 func (p *Postgres) SaveNode(ctx context.Context, n coordinator.NodeRecord) error {
 	_, err := p.pool.Exec(ctx, `
 		INSERT INTO nodes (id, addr, capacity) VALUES ($1, $2, $3)
@@ -70,6 +70,7 @@ func (p *Postgres) SaveFile(ctx context.Context, f coordinator.FileRecord) error
 	return tx.Commit(ctx)
 }
 
+// UpdateShard ghi vị trí mới của một shard sau repair (upsert).
 func (p *Postgres) UpdateShard(ctx context.Context, fileID string, segIndex, shardIndex int, hash, nodeID string) error {
 	_, err := p.pool.Exec(ctx, `
 		INSERT INTO shards (file_id, seg_index, shard_index, hash, node_id)
@@ -164,6 +165,7 @@ func (p *Postgres) Load(ctx context.Context) ([]coordinator.NodeRecord, []coordi
 	return nodes, out, nil
 }
 
+// SaveSettings ghi JSON settings vào dòng duy nhất của bảng settings.
 func (p *Postgres) SaveSettings(ctx context.Context, data []byte) error {
 	_, err := p.pool.Exec(ctx, `
 		INSERT INTO settings (id, data) VALUES (1, $1)
@@ -172,6 +174,7 @@ func (p *Postgres) SaveSettings(ctx context.Context, data []byte) error {
 	return err
 }
 
+// LoadSettings đọc JSON settings; bảng còn trống thì trả nil, nil.
 func (p *Postgres) LoadSettings(ctx context.Context) ([]byte, error) {
 	var data []byte
 	err := p.pool.QueryRow(ctx, `SELECT data FROM settings WHERE id = 1`).Scan(&data)
@@ -181,6 +184,7 @@ func (p *Postgres) LoadSettings(ctx context.Context) ([]byte, error) {
 	return data, err
 }
 
+// Ping kiểm tra DB còn trả lời.
 func (p *Postgres) Ping(ctx context.Context) error {
 	return p.pool.Ping(ctx)
 }

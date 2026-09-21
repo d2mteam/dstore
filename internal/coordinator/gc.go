@@ -37,6 +37,8 @@ type Collector struct {
 // được tôn trọng: shard mới thấy mồ côi lần đầu chỉ bị ghi nhận, chưa bị xóa.
 func (c *Collector) Trigger() { c.now.Fire() }
 
+// Run chạy RunOnce mỗi Interval cho tới khi ctx bị hủy, bỏ qua nhịp nào
+// Settings.GCPaused đang bật; lượt yêu cầu qua Trigger thì luôn chạy.
 func (c *Collector) Run(ctx context.Context) {
 	ticker := time.NewTicker(c.Interval)
 	defer ticker.Stop()
