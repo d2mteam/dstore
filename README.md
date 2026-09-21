@@ -40,8 +40,8 @@ Mặc định demo: `k=4`, `m=2`, segment 4 MB, 8 node — tốn 1.5x dung lư�
 | --- | --- | --- |
 | Gateway | `cmd/gateway` | API công khai: ứng dụng PUT/GET file bằng HTTP thường, không cần biết erasure coding |
 | Client | `cmd/dsctl` | Công cụ vận hành: tự encode/decode, upload/download song song thẳng với node |
-| Coordinator | `cmd/coordinator` | Registry node, metadata file/shard, chọn node đặt shard, phát hiện node chết, repair, dọn rác |
-| Node | `cmd/node` | Kiểm hash, phục vụ PUT/GET shard, gửi heartbeat |
+| Coordinator | `cmd/coordinator` | Registry node, metadata file/shard, chọn node đặt shard, phát hiện node chết, repair, dọn rác; web UI quản trị ở `/ui/` |
+| Node | `cmd/node` | Kiểm hash, phục vụ PUT/GET shard, gửi heartbeat; web UI cấu hình kết nối ở `/ui/` |
 | PostgreSQL | `postgres:16` hoặc RDS | Metadata của coordinator và bảng chủ sở hữu của gateway |
 | MinIO / S3 | `quay.io/minio/minio` hoặc Amazon S3 | Byte của shard |
 
@@ -78,7 +78,7 @@ thêm HTTP, xác thực và bảng chủ sở hữu.
 ### 1.4 Bên trong coordinator
 
 ```text
-                     HTTP API  /nodes  /files  /metrics
+                     HTTP API  /nodes  /files  /metrics  /ui
                                    │
     HealthMonitor  mỗi 5 s         ▼          Repairer  mỗi 10 s
     node quá hạn → offline ──▶ ┌───────┐ ◀── segment thiếu shard → tái tạo
@@ -98,6 +98,11 @@ vấn đọc từ RAM cho nhanh, còn `MetaStore` chỉ nhận những thay đ�
 | [HealthMonitor](internal/coordinator/health.go) | 5 s | Node quá 20 s không heartbeat → `offline`, shard của nó → `lost` | Chỉ RAM |
 | [Repairer](internal/coordinator/repair.go) | 10 s | Segment thiếu shard → tải `k` shard, tái tạo, đặt sang node khác | Node + PostgreSQL |
 | [Collector](internal/coordinator/gc.go) | 60 s | Shard trên node mà metadata không tham chiếu → xóa (sau thời gian ân hạn) | Node |
+
+Heartbeat timeout, thời gian ân hạn của GC và công tắc tạm dừng repair/GC nằm trong
+[Settings](internal/coordinator/settings.go): sửa được lúc đang chạy qua web UI, lưu trong bảng
+`settings` của PostgreSQL, và các vòng lặp đọc lại mỗi lượt. Nút "chạy ngay" trên UI chỉ đẩy thêm
+một lượt vào đúng goroutine của vòng lặp đó, nên hai lượt repair không bao giờ chạy chồng nhau.
 
 ### 1.5 Thành phần nào hỏng thì sao
 
@@ -121,10 +126,10 @@ một máy:
 | Dịch vụ | Cổng ra máy host | Ghi chú |
 | --- | --- | --- |
 | gateway | 8000 | Cửa vào cho ứng dụng — khi triển khai thật, đây là cổng duy nhất mở ra ngoài |
-| coordinator | 9000 | Chỉ để xem API và metrics khi demo |
+| coordinator | 9000 | API, metrics và web UI `http://localhost:9000/ui/` |
 | postgres | 5433 | Xem metadata bằng `psql` |
 | minio | 19001 | Giao diện web của MinIO |
-| node-1 … node-8 | — | Chỉ trong mạng nội bộ |
+| node-1 … node-8 | 8081 … 8088 | Web UI của từng node. Cổng này mở cả API shard ra máy host — chỉ hợp khi demo |
 | dsctl | — | `docker compose run`, chạy trong mạng nội bộ |
 
 Trên AWS — **đề xuất, chưa triển khai thử**:
@@ -189,13 +194,16 @@ internal/
   ec/           bọc reedsolomon: Encode/Reconstruct/Decode một segment
   shardclient/  client HTTP đọc/ghi shard (dsctl và repair dùng chung)
   node/         store.go (interface)  diskstore.go  s3store.go  api.go  heartbeat.go
+                settings.go  admin.go (API của web UI)
   coordinator/  store.go  persist.go  placement.go  api.go  health.go  repair.go  gc.go  metrics.go
+                settings.go  admin.go (API của web UI)
   metadb/       metadata của coordinator trong PostgreSQL (schema.sql)
   pgdb/         mở kết nối PostgreSQL, tương thích Amazon RDS (TLS, IAM)
   client/       client.go  upload.go  download.go
   gateway/      gateway.go  auth.go  registry.go
   testcluster/  dựng cụm coordinator + node trong tiến trình test
   sim/          mô phỏng nghìn node để chọn k/m và ngưỡng repair
+  webui/        trang HTML/JS nhúng vào binary, đăng nhập và chặn CSRF cho /ui/
 deploy/         docker-compose.yml: PostgreSQL + MinIO + coordinator + gateway + 8 node
 scripts/        chaos.sh: tắt/bật node ngẫu nhiên
 ```
@@ -204,6 +212,7 @@ Phụ thuộc giữa các gói chỉ đi một chiều (kiểm bằng `go list`)
 
 ```text
 tầng 0   protocol   ec   pgdb   sim    không phụ thuộc gói nội bộ nào
+         webui
 tầng 1   shardclient                   → ec
 tầng 2   node                          → protocol
          coordinator                   → protocol, ec, shardclient
@@ -248,6 +257,7 @@ Không phải mọi thứ trong coordinator đều cần lưu ([persist.go](inte
 | --- | --- | --- |
 | **Trạng thái cứng** | File gồm segment nào, shard nào nằm trên node nào, địa chỉ node | Mất là mất dữ liệu → ghi xuống PostgreSQL |
 | **Trạng thái mềm** | Node sống/chết, shard ok/lost, dung lượng đã dùng | Heartbeat dựng lại trong vài giây → không lưu |
+| **Tham số vận hành** | Heartbeat timeout, GC grace, tạm dừng repair/GC — sửa qua web UI | Ghi xuống PostgreSQL, đè lên env ở lần khởi động sau |
 
 Ghi trạng thái mềm thì mỗi 5 giây mỗi node lại một lần ghi DB mà chẳng được gì. Khi khởi động,
 coordinator đọc lại trạng thái cứng rồi coi mọi node như vừa heartbeat: node còn sống sẽ tiếp tục
@@ -379,6 +389,21 @@ chỉ chiếm một file trên node.
 | GET | `/shards` | Liệt kê hash đang giữ (dùng đối chiếu, dọn rác) |
 | GET | `/healthz` | Health check |
 
+**Web UI** — cả hai dịch vụ phục vụ trang ở `GET /ui/` (`GET /` chuyển hướng tới đó) và một API
+JSON riêng cho trang dưới `/ui/api/`, cùng lớp đăng nhập ([webui.go](internal/webui/webui.go)):
+
+| Dịch vụ | Method | Path | Mô tả |
+| --- | --- | --- | --- |
+| coordinator | GET | `/ui/api/overview` | Số liệu cụm, bộ đếm, settings, thông số khởi động, DB còn trả lời không |
+| coordinator | PUT | `/ui/api/settings` | `{heartbeat_timeout, gc_grace, repair_paused, gc_paused}`, lưu DB trước rồi mới áp dụng |
+| coordinator | POST | `/ui/api/repair`, `/ui/api/gc` | Chạy thêm một lượt ngay, kể cả khi đang tạm dừng |
+| node | GET | `/ui/api/status` | Cấu hình kết nối, tình trạng kết nối, dung lượng, nơi lưu shard |
+| node | PUT | `/ui/api/settings` | `{coordinator_url, addr, capacity, heartbeat_interval}`, ghi `CONFIG_FILE` rồi đăng ký lại |
+| node | POST | `/ui/api/test-connection` | Thử gọi `GET /nodes` của một coordinator trước khi lưu |
+| node | POST | `/ui/api/disconnect`, `/ui/api/connect` | Ngắt / nối lại heartbeat |
+
+Danh sách node, file, manifest và shard thì trang đọc thẳng từ API ở trên, không có bản sao riêng.
+
 ## 7. API gateway cho ứng dụng bên ngoài
 
 `dsctl` chạy được là nhờ nó nằm **trong** mạng nội bộ: nó gọi thẳng từng node, và
@@ -505,6 +530,36 @@ NODE_ID=node-1 LISTEN_ADDR=:8081 NODE_ADDR=http://localhost:8081 DATA_DIR=/tmp/n
 ./bin/dsctl put ./file.bin
 ```
 
+### Web UI quản trị
+
+| Trang | Địa chỉ | Làm được gì |
+| --- | --- | --- |
+| Control plane | http://localhost:9000/ui/ | Tổng quan cụm, độ khỏe segment, bảng node, bảng file và shard của từng file nằm ở node nào, xóa file; sửa heartbeat timeout và GC grace; tạm dừng hoặc chạy ngay repair/GC |
+| Node | http://localhost:8081/ui/ … 8088 | Tình trạng kết nối tới coordinator; đổi coordinator, địa chỉ, dung lượng, nhịp heartbeat; thử kết nối trước khi lưu; ngắt/nối lại heartbeat; xem shard đang giữ |
+
+Đăng nhập bằng `admin` / `dstore-ui` (`UI_PASSWORD` trong compose). Để trống `UI_PASSWORD` thì UI
+không cần đăng nhập và service ghi cảnh báo vào log. Request ghi (lưu, xóa, ngắt kết nối) đến từ
+trang web khác bị chặn bằng `http.CrossOriginProtection`, vì trình duyệt tự gửi kèm mật khẩu đã nhớ.
+
+Cấu hình sửa qua UI **thắng env** ở những lần khởi động sau: coordinator lưu trong PostgreSQL, node
+lưu vào `CONFIG_FILE` (trong compose là `/var/lib/dstore/node.json` — còn sau `docker compose
+restart`, mất khi container bị tạo lại). Những gì gắn với danh tính và dữ liệu — `NODE_ID`, nơi lưu
+shard, `DATABASE_URL`, chu kỳ các vòng lặp — UI chỉ hiển thị, đổi thì sửa env rồi restart.
+
+Trang là HTML + JavaScript thuần nhúng vào binary bằng `go:embed`: không có bước build frontend,
+không tải gì từ internet, tự làm mới mỗi 3 giây.
+
+Nút **Ngắt kết nối** ở trang node cho phép diễn một vụ node chết mà không cần `docker stop`: node
+ngừng heartbeat nhưng vẫn phục vụ shard. Đã chạy thật trên cụm compose:
+
+| Bước | Kết quả |
+| --- | --- |
+| Tạm dừng repair ở trang coordinator, ngắt kết nối node-5 | Sau timeout node-5 `offline`, 13 segment tụt xuống 5/6, trang hiện cảnh báo, repair đứng yên |
+| `docker restart coordinator` | Vẫn tạm dừng — settings nạp lại từ PostgreSQL |
+| Bấm **Chạy repair ngay** | Tái tạo 13 shard, mọi segment về 6/6 dù repair tự động vẫn tạm dừng |
+| Nối lại node-3 sau khi shard của nó đã được repair sang node khác | Coordinator đối chiếu, GC dọn 11 bản cũ sau thời gian ân hạn |
+| Đổi dung lượng node-7 qua UI, `docker restart node-7` | Node dùng cấu hình đã lưu, coordinator nhận dung lượng mới ngay khi node đăng ký lại |
+
 ### Quan sát cụm
 
 `GET /metrics` xuất số liệu theo định dạng Prometheus. Quan trọng nhất là
@@ -595,18 +650,24 @@ chạy trên một RDS thật.
 | --- | --- | --- |
 | k / m | 4 / 2 | cờ `-k`, `-m` của dsctl |
 | Segment size | 4 MB (shard 1 MB) | cờ `-segment` của dsctl |
-| Heartbeat | 5 s | `HEARTBEAT_INTERVAL` (node) |
-| Timeout node chết | 20 s | `HEARTBEAT_TIMEOUT` (coordinator) |
+| Heartbeat | 5 s | `HEARTBEAT_INTERVAL` (node), hoặc web UI node |
+| Timeout node chết | 20 s | `HEARTBEAT_TIMEOUT` (coordinator), hoặc web UI coordinator |
 | Chu kỳ repair | 10 s | `REPAIR_INTERVAL` (coordinator) |
 | Chu kỳ dọn rác | 60 s | `GC_INTERVAL` (coordinator) |
-| Ân hạn dọn rác | 2 phút | `GC_GRACE` (coordinator) |
-| Dung lượng node | 512 MB | `CAPACITY_BYTES` (node) |
-
+| Ân hạn dọn rác | 2 phút | `GC_GRACE` (coordinator), hoặc web UI coordinator |
+| Tạm dừng repair / GC | tắt | Chỉ qua web UI coordinator |
+| Dung lượng node | 512 MB | `CAPACITY_BYTES` (node), hoặc web UI node |
+| Coordinator mà node kết nối | `http://localhost:9000` | `COORDINATOR_URL` (node), hoặc web UI node |
 | Nơi cất shard | `s3` trong compose | `STORAGE` (node): `s3` hoặc `disk` |
 | Bucket / prefix | `dstore-shards` / `nodes/<id>/` | `S3_BUCKET`, `S3_PREFIX` (node) |
 | Endpoint S3 | trống = Amazon S3 | `S3_ENDPOINT`, `S3_FORCE_PATH_STYLE`, `S3_CREATE_BUCKET` (node) |
 | Metadata | trống = chỉ trong RAM | `DATABASE_URL` (coordinator, gateway) |
 | Đăng nhập DB | mật khẩu | `DB_IAM_AUTH`, `DB_AUTO_MIGRATE` (coordinator, gateway) |
+| Mật khẩu web UI | trống = không cần đăng nhập | `UI_PASSWORD` (coordinator, node), tên đăng nhập `admin` |
+| Nơi node lưu cấu hình sửa qua UI | trống = không lưu | `CONFIG_FILE` (node) |
+
+Tham số có "hoặc web UI": env là giá trị mặc định, bản đã sửa qua UI (trong PostgreSQL hoặc
+`CONFIG_FILE`) được dùng thay ở những lần khởi động sau.
 
 Node còn đọc `NODE_ID`, `NODE_ADDR`, `LISTEN_ADDR`, `COORDINATOR_URL`, `DATA_DIR` (khi `STORAGE=disk`);
 khóa S3 và region theo chuẩn AWS: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`.
@@ -626,12 +687,13 @@ trỏ vào DB đang có dữ liệu cũng không sao.
 | Test | Kiểm chứng |
 | --- | --- |
 | `internal/ec` | Bỏ ngẫu nhiên ≤ m shard vẫn khôi phục đúng; thiếu quá m thì báo lỗi; shard tái tạo giống hệt bản gốc |
-| `internal/node` | Cùng một bộ kiểm tra cho cả đĩa và S3: PUT/GET/HEAD/DELETE, từ chối sai hash, không đếm trùng, đếm lại sau restart; S3 từ chối checksum sai phía server |
-| `internal/metadb` | Ghi rồi đọc ra y nguyên thứ tự segment/shard, repair cập nhật vị trí, commit lại không nhân đôi, xóa file kéo theo segment và shard |
+| `internal/node` | Cùng một bộ kiểm tra cho cả đĩa và S3: PUT/GET/HEAD/DELETE, từ chối sai hash, không đếm trùng, đếm lại sau restart; S3 từ chối checksum sai phía server. Đổi coordinator lúc đang chạy thì thôi heartbeat bên cũ; ngắt rồi nối lại thì đăng ký lại; lỗi liên tiếp được ghi nhận; file cấu hình giữ giá trị env cho trường còn thiếu; phép thử kết nối nhận ra địa chỉ không phải coordinator |
+| `internal/metadb` | Ghi rồi đọc ra y nguyên thứ tự segment/shard, repair cập nhật vị trí, commit lại không nhân đôi, xóa file kéo theo segment và shard; settings còn sau restart |
 | `internal/pgdb` | Token IAM cho RDS ký đúng, bật IAM mà tắt TLS thì báo lỗi |
 | `internal/client` | Upload/download khớp từng byte; tắt node vẫn đọc được; repair đưa lại `k+m`; mất quá m thì hỏng; node quay lại được khôi phục shard |
-| `internal/coordinator` | Restart khôi phục đúng file và vị trí shard sau repair; node chết trong lúc coordinator tắt vẫn bị phát hiện; DB chết thì commit trả 503. GC xóa shard mồ côi nhưng giữ shard đang tham chiếu, không đụng shard vừa commit trong thời gian ân hạn, dọn bản cũ sau repair, bỏ qua node offline; metrics phản ánh đúng mức độ khỏe và counter |
+| `internal/coordinator` | Restart khôi phục đúng file và vị trí shard sau repair; node chết trong lúc coordinator tắt vẫn bị phát hiện; DB chết thì commit trả 503. GC xóa shard mồ côi nhưng giữ shard đang tham chiếu, không đụng shard vừa commit trong thời gian ân hạn, dọn bản cũ sau repair, bỏ qua node offline; metrics phản ánh đúng mức độ khỏe và counter. Settings sai bị từ chối mà không đổi gì, đúng thì còn sau restart, DB chết thì 503; tạm dừng repair thì vòng tự động đứng yên còn nút chạy ngay vẫn chạy |
 | `internal/gateway` | Bảng chủ sở hữu chạy giống nhau trên RAM và PostgreSQL. Upload/download qua HTTP khớp byte, đòi API key, cách ly tenant, Range đúng 4 dạng header, chặn file quá lớn và tên có `%2F` |
+| `internal/webui` | Trang, file tĩnh và API cùng nằm dưới `/ui/`; mọi file mà trang tham chiếu đều có thật; sai mật khẩu trả 401; request ghi từ trang web khác trả 403, còn curl vẫn gọi được |
 | `internal/sim` | Không node nào hỏng thì không repair; m lớn hơn mất ít hơn; chờ lâu hơn bớt repair thừa; ngưỡng cao đổi phơi nhiễm lấy băng thông; cùng seed ra cùng kết quả |
 
 `internal/client/e2e_test.go` dựng nguyên cụm coordinator + 8 node **trong tiến trình test**,
@@ -726,6 +788,9 @@ phải dự báo tuyệt đối.
 - **Chưa có audit**: node có thể báo "còn giữ shard" mà thực ra đã xóa; chỉ phát hiện khi đọc.
 - **Cùng một mạng Docker**: chưa xử lý NAT traversal.
 - `dsctl nodes` hiển thị số liệu theo heartbeat gần nhất nên có thể trễ tới 5 s.
+- **Web UI có một mật khẩu chung, chạy HTTP thường**: dùng thật cần TLS (đặt sau reverse proxy),
+  tài khoản riêng và nhật ký ai đã đổi gì. Nút xóa file gọi `DELETE /files/{id}` của control plane,
+  API vốn không có xác thực (xem gạch đầu tiên).
 
 ## 14. Hướng mở rộng
 
