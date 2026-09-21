@@ -1,0 +1,9 @@
+# Binary build ra
+bin/
+
+# File demo upload/download
+deploy/work/*
+!deploy/work/.gitkeep
+
+# Tài liệu markdown không theo dõi trong git
+*.md
