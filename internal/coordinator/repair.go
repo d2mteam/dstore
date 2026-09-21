@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -114,8 +115,12 @@ func (r *Repairer) repairSegment(ctx context.Context, seg SegmentRef) error {
 			r.Log.Warn("ghi shard tái tạo lỗi", "node", target.ID, "err", err)
 			continue
 		}
-		if err := r.Store.ReplaceShard(seg.FileID, seg.SegIndex, shardIndex, hash, target.ID); err != nil {
-			return err
+		if err := r.Store.ReplaceShard(ctx, seg.FileID, seg.SegIndex, shardIndex, hash, target.ID); err != nil {
+			if !errors.Is(err, ErrStorage) {
+				return err
+			}
+			// Shard đã nằm an toàn ở node mới, chỉ là chưa ghi được xuống DB.
+			r.Log.Warn("không lưu được vị trí shard mới vào DB", "file", seg.FileID, "err", err)
 		}
 		r.Metrics.RepairedShard()
 		r.Log.Info("đã tái tạo shard",

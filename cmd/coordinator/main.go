@@ -26,8 +26,20 @@ func main() {
 		gcGrace       = envDuration("GC_GRACE", 2*time.Minute)
 	)
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// Metadata đi qua MetaStore; bản này giữ trong RAM, restart là mất.
+	meta := coordinator.NewMemoryMeta()
+
 	metrics := &coordinator.Metrics{}
-	store := coordinator.NewStore()
+	store := coordinator.NewStore(meta)
+	nodes, files, err := store.Load(ctx)
+	if err != nil {
+		log.Error("không đọc được metadata", "err", err)
+		os.Exit(1)
+	}
+	log.Info("đã khôi phục metadata", "nodes", nodes, "files", files)
 	placer := coordinator.NewPlacer(store)
 	shards := shardclient.New(30 * time.Second)
 
@@ -46,9 +58,6 @@ func main() {
 	api := &coordinator.Server{
 		Store: store, Placer: placer, Health: health, Shards: shards, Metrics: metrics, Log: log,
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	go health.Run(ctx)
 	go repairer.Run(ctx)

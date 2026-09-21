@@ -1,6 +1,7 @@
 package coordinator_test
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -35,14 +36,14 @@ func scrape(t *testing.T, srv *coordinator.Server) string {
 
 // Metrics phải phản ánh đúng trạng thái cụm, kể cả mức độ khỏe của từng segment.
 func TestMetricsReflectClusterState(t *testing.T) {
-	store := coordinator.NewStore()
+	store := coordinator.NewStore(coordinator.NewMemoryMeta())
 	srv := &coordinator.Server{Store: store, Metrics: &coordinator.Metrics{}, Log: slog.New(slog.DiscardHandler)}
 
 	for _, id := range []string{"node-1", "node-2", "node-3"} {
-		store.RegisterNode(id, "http://"+id+":8080", 1000)
+		store.RegisterNode(context.Background(), id, "http://"+id+":8080", 1000)
 	}
 	store.CreateFile("f1", "f1.bin", 300, 2, 1, 300, 1)
-	err := store.CommitFile("f1", []protocol.CommitSegment{{
+	err := store.CommitFile(context.Background(), "f1", []protocol.CommitSegment{{
 		Index: 0, OrigSize: 300,
 		Shards: []protocol.CommitShard{
 			{Index: 0, Hash: "a", NodeID: "node-1"},
@@ -79,7 +80,7 @@ func TestMetricsReflectClusterState(t *testing.T) {
 
 // Counter tăng theo sự kiện và an toàn khi Metrics chưa được gắn.
 func TestMetricsCounters(t *testing.T) {
-	store := coordinator.NewStore()
+	store := coordinator.NewStore(coordinator.NewMemoryMeta())
 	m := &coordinator.Metrics{}
 	srv := &coordinator.Server{Store: store, Metrics: m, Log: slog.New(slog.DiscardHandler)}
 

@@ -48,7 +48,7 @@ func Start(t *testing.T, nodeCount int) *Cluster {
 	t.Helper()
 	log := slog.New(slog.DiscardHandler)
 
-	store := coordinator.NewStore()
+	store := coordinator.NewStore(coordinator.NewMemoryMeta())
 	placer := coordinator.NewPlacer(store)
 	shards := shardclient.New(5 * time.Second)
 	health := &coordinator.HealthMonitor{

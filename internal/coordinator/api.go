@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -62,7 +63,12 @@ func (s *Server) registerNode(w http.ResponseWriter, r *http.Request) {
 		id = "node-" + randomID(4)
 	}
 
-	returned := s.Store.RegisterNode(id, req.Addr, req.Capacity)
+	returned, err := s.Store.RegisterNode(r.Context(), id, req.Addr, req.Capacity)
+	if err != nil {
+		// Node vẫn dùng được ngay; chỉ là coordinator restart sẽ không nhớ nó
+		// cho tới khi nó heartbeat và đăng ký lại.
+		s.Log.Warn("không lưu được node vào DB", "node", id, "err", err)
+	}
 	s.Log.Info("node đăng ký", "node", id, "addr", req.Addr, "quay_lai", returned)
 	if returned {
 		// Node sống lại: đối chiếu shard còn trên đĩa ở nền, không chặn response.
@@ -147,8 +153,12 @@ func (s *Server) commitFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	if err := s.Store.CommitFile(id, req.Segments); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if err := s.Store.CommitFile(r.Context(), id, req.Segments); err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, ErrStorage) {
+			status = http.StatusServiceUnavailable
+		}
+		writeError(w, status, err.Error())
 		return
 	}
 	s.Log.Info("commit file", "file", id, "segments", len(req.Segments))
@@ -169,7 +179,11 @@ func (s *Server) listFiles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteFile(w http.ResponseWriter, r *http.Request) {
-	locs, ok := s.Store.DeleteFile(r.PathValue("id"))
+	locs, ok, err := s.Store.DeleteFile(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
 	if !ok {
 		writeError(w, http.StatusNotFound, "không có file này")
 		return

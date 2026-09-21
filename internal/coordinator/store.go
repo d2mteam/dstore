@@ -3,6 +3,7 @@
 package coordinator
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -66,12 +67,14 @@ type Store struct {
 	mu    sync.RWMutex
 	nodes map[string]*Node
 	files map[string]*File
+	meta  MetaStore // nơi lưu bền trạng thái cứng, xem persist.go
 }
 
-func NewStore() *Store {
+func NewStore(meta MetaStore) *Store {
 	return &Store{
 		nodes: make(map[string]*Node),
 		files: make(map[string]*File),
+		meta:  meta,
 	}
 }
 
@@ -79,23 +82,27 @@ func NewStore() *Store {
 
 // RegisterNode thêm node mới hoặc đưa node cũ trở lại online.
 // Trả về true nếu node vừa quay lại từ trạng thái offline.
-func (s *Store) RegisterNode(id, addr string, capacity int64) (returned bool) {
+func (s *Store) RegisterNode(ctx context.Context, id, addr string, capacity int64) (returned bool, err error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if n, ok := s.nodes[id]; ok {
 		returned = n.Status == protocol.NodeOffline
 		n.Addr = addr
 		n.Capacity = capacity
 		n.Status = protocol.NodeOnline
 		n.LastHeartbeat = time.Now()
-		return returned
+	} else {
+		s.nodes[id] = &Node{
+			ID: id, Addr: addr, Capacity: capacity,
+			Status: protocol.NodeOnline, LastHeartbeat: time.Now(),
+		}
 	}
-	s.nodes[id] = &Node{
-		ID: id, Addr: addr, Capacity: capacity,
-		Status: protocol.NodeOnline, LastHeartbeat: time.Now(),
+	s.mu.Unlock()
+
+	// Ghi DB sau khi nhả khóa để một lần ghi chậm không chặn mọi request khác.
+	if err := s.meta.SaveNode(ctx, NodeRecord{ID: id, Addr: addr, Capacity: capacity}); err != nil {
+		return returned, fmt.Errorf("%w: %v", ErrStorage, err)
 	}
-	return false
+	return returned, nil
 }
 
 // Heartbeat cập nhật số liệu node. Trả về false nếu coordinator chưa biết node này.
@@ -236,35 +243,31 @@ func (s *Store) CreateFile(id, name string, size int64, k, m, segmentSize, segme
 }
 
 // CommitFile ghi nhận shard nào đã lên node nào; sau bước này file mới đọc được.
-func (s *Store) CommitFile(id string, segments []protocol.CommitSegment) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+func (s *Store) CommitFile(ctx context.Context, id string, segments []protocol.CommitSegment) error {
+	s.mu.RLock()
 	f, ok := s.files[id]
+	var rec FileRecord
+	var err error
+	if ok {
+		rec, err = commitRecord(f, segments)
+	}
+	s.mu.RUnlock()
 	if !ok {
 		return fmt.Errorf("không có file %s", id)
 	}
-	if len(segments) != len(f.Segments) {
-		return fmt.Errorf("commit %d segment nhưng plan có %d", len(segments), len(f.Segments))
+	if err != nil {
+		return err
 	}
 
-	for _, cs := range segments {
-		if cs.Index < 0 || cs.Index >= len(f.Segments) {
-			return fmt.Errorf("segment index %d nằm ngoài phạm vi", cs.Index)
-		}
-		if len(cs.Shards) < f.K {
-			return fmt.Errorf("segment %d chỉ commit %d shard, cần tối thiểu %d", cs.Index, len(cs.Shards), f.K)
-		}
-		seg := f.Segments[cs.Index]
-		seg.OrigSize = cs.OrigSize
-		seg.Shards = seg.Shards[:0]
-		for _, sh := range cs.Shards {
-			seg.Shards = append(seg.Shards, &Shard{
-				Index: sh.Index, Hash: sh.Hash, NodeID: sh.NodeID, Status: protocol.ShardOK,
-			})
-		}
+	// Lưu bền trước, đưa vào bộ nhớ sau: client chỉ nhận "commit thành công"
+	// khi metadata đã nằm trong DB.
+	if err := s.meta.SaveFile(ctx, rec); err != nil {
+		return fmt.Errorf("%w: %v", ErrStorage, err)
 	}
-	f.Committed = true
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.files[id] = fileFromRecord(rec)
 	return nil
 }
 
@@ -323,14 +326,25 @@ func (s *Store) Files() []protocol.FileInfo {
 	return out
 }
 
-// DeleteFile bỏ metadata và trả về danh sách (node addr, hash) cần xóa trên đĩa.
-func (s *Store) DeleteFile(id string) ([]ShardLocation, bool) {
+// DeleteFile bỏ metadata và trả về danh sách (node addr, hash) cần xóa trên node.
+func (s *Store) DeleteFile(ctx context.Context, id string) ([]ShardLocation, bool, error) {
+	s.mu.RLock()
+	_, ok := s.files[id]
+	s.mu.RUnlock()
+	if !ok {
+		return nil, false, nil
+	}
+
+	// Xóa trong DB trước: bước này lỗi thì chưa có gì thay đổi.
+	if err := s.meta.DeleteFile(ctx, id); err != nil {
+		return nil, true, fmt.Errorf("%w: %v", ErrStorage, err)
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
 	f, ok := s.files[id]
 	if !ok {
-		return nil, false
+		return nil, false, nil // vừa bị xóa bởi request khác
 	}
 	var locs []ShardLocation
 	for _, seg := range f.Segments {
@@ -341,7 +355,7 @@ func (s *Store) DeleteFile(id string) ([]ShardLocation, bool) {
 		}
 	}
 	delete(s.files, id)
-	return locs, true
+	return locs, true, nil
 }
 
 // ShardLocation là một shard cụ thể nằm ở một node cụ thể.
@@ -413,7 +427,20 @@ func (s *Store) DegradedSegments() []SegmentRef {
 }
 
 // ReplaceShard cập nhật metadata sau khi repair đặt shard lên node mới.
-func (s *Store) ReplaceShard(fileID string, segIndex, shardIndex int, hash, nodeID string) error {
+func (s *Store) ReplaceShard(ctx context.Context, fileID string, segIndex, shardIndex int, hash, nodeID string) error {
+	if err := s.replaceShardInMemory(fileID, segIndex, shardIndex, hash, nodeID); err != nil {
+		return err
+	}
+	if err := s.meta.UpdateShard(ctx, fileID, segIndex, shardIndex, hash, nodeID); err != nil {
+		// Bộ nhớ vẫn đúng — shard thật sự đã nằm ở node mới. Nếu coordinator
+		// restart trước khi ghi lại được, metadata trỏ về node cũ đã chết, shard
+		// thành lost và repair chạy lại: tốn băng thông nhưng không mất dữ liệu.
+		return fmt.Errorf("%w: %v", ErrStorage, err)
+	}
+	return nil
+}
+
+func (s *Store) replaceShardInMemory(fileID string, segIndex, shardIndex int, hash, nodeID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

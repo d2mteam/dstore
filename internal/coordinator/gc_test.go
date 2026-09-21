@@ -35,8 +35,8 @@ func newGCFixture(t *testing.T, grace time.Duration) *gcFixture {
 	srv := httptest.NewServer((&node.Server{ID: "node-1", Store: disk, Log: log}).Routes())
 	t.Cleanup(srv.Close)
 
-	store := coordinator.NewStore()
-	store.RegisterNode("node-1", srv.URL, 1<<30)
+	store := coordinator.NewStore(coordinator.NewMemoryMeta())
+	store.RegisterNode(context.Background(), "node-1", srv.URL, 1<<30)
 
 	return &gcFixture{
 		t:     t,
@@ -68,7 +68,7 @@ func (f *gcFixture) commit(fileID string, hashes ...string) {
 	for i, h := range hashes {
 		shards = append(shards, protocol.CommitShard{Index: i, Hash: h, NodeID: "node-1"})
 	}
-	err := f.store.CommitFile(fileID, []protocol.CommitSegment{
+	err := f.store.CommitFile(context.Background(), fileID, []protocol.CommitSegment{
 		{Index: 0, OrigSize: 100, Shards: shards},
 	})
 	if err != nil {
@@ -132,7 +132,7 @@ func TestCollectorCleansUpAfterRepair(t *testing.T) {
 	f.commit("file-1", old)
 
 	// Repair tái tạo shard 0 sang node khác.
-	if err := f.store.ReplaceShard("file-1", 0, 0, "aa"+old[2:], "node-2"); err != nil {
+	if err := f.store.ReplaceShard(context.Background(), "file-1", 0, 0, "aa"+old[2:], "node-2"); err != nil {
 		t.Fatal(err)
 	}
 
