@@ -1,9 +1,3 @@
-// Command simulator mô phỏng cụm hàng nghìn node để chọn k, m và ngưỡng repair.
-//
-//	simulator                     # chạy cấu hình mặc định
-//	simulator -compare km         # so sánh các cặp k/m
-//	simulator -compare threshold  # so sánh ngưỡng repair và độ trễ repair
-//	simulator -compare bandwidth  # so sánh năng lực repair của cụm
 package main
 
 import (

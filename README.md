@@ -209,6 +209,10 @@ scripts/        chaos.sh: tắt/bật node ngẫu nhiên
 docs/images/    ảnh chụp web UI dùng trong README
 ```
 
+Mỗi package và mỗi command có tài liệu riêng trong `doc.go`: package làm gì, nằm ở đâu trong
+kiến trúc, từng file lo phần nào, và biến môi trường hay cờ của từng command. Đọc bằng
+`go doc ./internal/coordinator`, `go doc -all ./internal/node`, `go doc ./cmd/node`...
+
 Phụ thuộc giữa các gói chỉ đi một chiều (kiểm bằng `go list`):
 
 ```text

@@ -1,5 +1,3 @@
-// Command node là data plane: cất shard (đĩa local hoặc MinIO) và gửi heartbeat
-// cho coordinator.
 package main
 
 import (

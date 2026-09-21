@@ -1,5 +1,3 @@
-// Command gateway là API công khai của hệ thống: ứng dụng bên ngoài PUT/GET file
-// bằng HTTP thường, không cần biết tới erasure coding, coordinator hay node.
 package main
 
 import (

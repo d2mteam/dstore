@@ -1,4 +1,3 @@
-// Command dsctl là CLI của người dùng: put / get / ls / nodes / rm.
 package main
 
 import (

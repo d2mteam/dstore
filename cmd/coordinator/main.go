@@ -1,4 +1,3 @@
-// Command coordinator là control plane: registry node, metadata file, repair.
 package main
 
 import (
