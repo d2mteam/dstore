@@ -1,12 +1,3 @@
-// Package sim mô phỏng một cụm hàng nghìn node để trả lời hai câu hỏi:
-// chọn k/m bao nhiêu, và có nên repair ngay khi mất shard đầu tiên không.
-//
-// Mô phỏng theo bước thời gian (mặc định 1 giờ). Mỗi bước: node hỏng theo
-// phân phối mũ, node tạm nghỉ thì quay lại cùng dữ liệu, node chết hẳn thì
-// mất dữ liệu; coordinator repair trong giới hạn băng thông.
-//
-// Đây là mô hình để so sánh các cấu hình với nhau, không phải dự báo tuyệt đối:
-// giả định các node hỏng độc lập, bỏ qua hỏng theo cụm (mất điện cả rack).
 package sim
 
 import (

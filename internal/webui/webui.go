@@ -1,9 +1,3 @@
-// Package webui phục vụ giao diện web quản trị của coordinator và node.
-//
-// Trang là HTML + JavaScript tĩnh nhúng thẳng vào binary (không có bước build
-// frontend), gọi API JSON dưới /ui/api/ do từng service tự cung cấp. Mọi thứ
-// nằm chung dưới /ui/ nên chỉ cần một lớp bảo vệ, và trình duyệt gửi kèm thông
-// tin đăng nhập cho cả trang lẫn API.
 package webui
 
 import (
@@ -20,9 +14,10 @@ var assets embed.FS
 // Page là file HTML của từng loại service trong assets/.
 type Page string
 
+// Các trang có sẵn, truyền cho Handler.
 const (
-	CoordinatorPage Page = "coordinator.html"
-	NodePage        Page = "node.html"
+	CoordinatorPage Page = "coordinator.html" // control plane: tổng quan cụm, file, cấu hình vận hành
+	NodePage        Page = "node.html"        // một node: kết nối tới coordinator, shard đang giữ
 )
 
 // User là tên đăng nhập duy nhất; mật khẩu lấy từ biến môi trường UI_PASSWORD.

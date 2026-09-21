@@ -1,5 +1,3 @@
-// Package client là phần logic của dsctl: nói chuyện với coordinator để lấy
-// metadata, rồi trao đổi dữ liệu trực tiếp với node.
 package client
 
 import (
@@ -16,6 +14,9 @@ import (
 	"dstore-demo/internal/shardclient"
 )
 
+// Client upload/download file và gọi API metadata của coordinator. K, M,
+// SegmentSize chỉ dùng khi upload; lúc download thì lấy theo manifest của file.
+// Dùng chung được giữa nhiều goroutine.
 type Client struct {
 	CoordinatorURL string
 	K              int
@@ -28,6 +29,8 @@ type Client struct {
 	shards *shardclient.Client
 }
 
+// New tạo Client trỏ vào coordinatorURL. parallel là số request shard chạy song
+// song tối đa cho mỗi lượt upload/download; <= 0 thì lấy 8.
 func New(coordinatorURL string, k, m, segmentSize, parallel int, log *slog.Logger) *Client {
 	if parallel <= 0 {
 		parallel = 8

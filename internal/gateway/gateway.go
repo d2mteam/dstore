@@ -1,11 +1,3 @@
-// Package gateway là API công khai của hệ thống: ứng dụng bên ngoài chỉ nói
-// chuyện với gateway bằng HTTP thường (PUT/GET file), không cần biết erasure
-// coding, không cần thấy coordinator hay node.
-//
-// Khác với dsctl — chạy trong mạng nội bộ và tự encode/decode — gateway đứng
-// giữa: nó nhận dữ liệu thô, tự chia shard, tự ghép lại khi đọc. Đổi lại, dữ
-// liệu phải đi qua gateway, nên gateway phải stream (không giữ cả file trong
-// RAM) và phải chạy nhiều bản vì nó là điểm nghẽn băng thông.
 package gateway
 
 import (
@@ -33,6 +25,7 @@ type Storage interface {
 	Delete(ctx context.Context, fileID string) error
 }
 
+// Server là HTTP handler của gateway. Tạo bằng New để có sẵn giới hạn đồng thời.
 type Server struct {
 	Storage Storage
 	Keys    Keys
@@ -48,6 +41,7 @@ type Server struct {
 	slots chan struct{}
 }
 
+// New tạo Server. maxConcurrent <= 0 thì lấy 32.
 func New(storage Storage, keys Keys, owners Owners, maxUpload int64, maxConcurrent int, log *slog.Logger) *Server {
 	if maxConcurrent <= 0 {
 		maxConcurrent = 32
@@ -63,6 +57,7 @@ func New(storage Storage, keys Keys, owners Owners, maxUpload int64, maxConcurre
 	}
 }
 
+// Routes trả handler của API /v1/files/... và /healthz, kèm log từng request.
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("PUT /v1/files/{name}", s.authenticated(s.upload))

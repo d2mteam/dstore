@@ -39,6 +39,7 @@ type Owners interface {
 //go:embed schema.sql
 var OwnersSchema string
 
+// PostgresOwners cài đặt Owners trên bảng file_owners, dùng chung giữa mọi bản gateway.
 type PostgresOwners struct {
 	pool *pgxpool.Pool
 }
@@ -48,6 +49,7 @@ func NewPostgresOwners(pool *pgxpool.Pool) *PostgresOwners {
 	return &PostgresOwners{pool: pool}
 }
 
+// Put ghi chủ sở hữu của file, thay bản cũ nếu có.
 func (p *PostgresOwners) Put(ctx context.Context, fileID string, meta FileMeta) error {
 	_, err := p.pool.Exec(ctx, `
 		INSERT INTO file_owners (file_id, tenant, name, content_type) VALUES ($1, $2, $3, $4)
@@ -57,6 +59,8 @@ func (p *PostgresOwners) Put(ctx context.Context, fileID string, meta FileMeta) 
 	return err
 }
 
+// Get trả metadata nếu file thuộc tenant; file của tenant khác trả về y như
+// file không tồn tại.
 func (p *PostgresOwners) Get(ctx context.Context, fileID, tenant string) (FileMeta, bool, error) {
 	// Lọc theo tenant ngay trong câu truy vấn: file của tenant khác và file
 	// không tồn tại trông y hệt nhau.
@@ -73,11 +77,13 @@ func (p *PostgresOwners) Get(ctx context.Context, fileID, tenant string) (FileMe
 	return m, true, nil
 }
 
+// Remove xóa dòng của file; không có dòng nào cũng không lỗi.
 func (p *PostgresOwners) Remove(ctx context.Context, fileID string) error {
 	_, err := p.pool.Exec(ctx, `DELETE FROM file_owners WHERE file_id = $1`, fileID)
 	return err
 }
 
+// OwnedBy trả mọi file của tenant, khóa theo file_id.
 func (p *PostgresOwners) OwnedBy(ctx context.Context, tenant string) (map[string]FileMeta, error) {
 	rows, err := p.pool.Query(ctx,
 		`SELECT file_id, name, content_type FROM file_owners WHERE tenant = $1`, tenant)
@@ -106,10 +112,12 @@ type MemoryOwners struct {
 	files map[string]FileMeta
 }
 
+// NewMemoryOwners tạo MemoryOwners rỗng.
 func NewMemoryOwners() *MemoryOwners {
 	return &MemoryOwners{files: make(map[string]FileMeta)}
 }
 
+// Put ghi chủ sở hữu của file, thay bản cũ nếu có.
 func (m *MemoryOwners) Put(_ context.Context, fileID string, meta FileMeta) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -117,6 +125,8 @@ func (m *MemoryOwners) Put(_ context.Context, fileID string, meta FileMeta) erro
 	return nil
 }
 
+// Get trả metadata nếu file thuộc tenant; file của tenant khác trả về y như
+// file không tồn tại.
 func (m *MemoryOwners) Get(_ context.Context, fileID, tenant string) (FileMeta, bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -127,6 +137,7 @@ func (m *MemoryOwners) Get(_ context.Context, fileID, tenant string) (FileMeta, 
 	return meta, true, nil
 }
 
+// Remove xóa file khỏi bảng; không có cũng không lỗi.
 func (m *MemoryOwners) Remove(_ context.Context, fileID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -134,6 +145,7 @@ func (m *MemoryOwners) Remove(_ context.Context, fileID string) error {
 	return nil
 }
 
+// OwnedBy trả mọi file của tenant, khóa theo file_id.
 func (m *MemoryOwners) OwnedBy(_ context.Context, tenant string) (map[string]FileMeta, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

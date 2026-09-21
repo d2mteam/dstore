@@ -1,5 +1,3 @@
-// Package testcluster dựng một cụm dstore (coordinator + nhiều node) ngay trong
-// tiến trình test, để test đi qua đúng luồng HTTP thật mà không cần Docker.
 package testcluster
 
 import (
