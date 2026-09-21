@@ -206,6 +206,7 @@ internal/
   webui/        trang HTML/JS nhúng vào binary, đăng nhập và chặn CSRF cho /ui/
 deploy/         docker-compose.yml: PostgreSQL + MinIO + coordinator + gateway + 8 node
 scripts/        chaos.sh: tắt/bật node ngẫu nhiên
+docs/images/    ảnh chụp web UI dùng trong README
 ```
 
 Phụ thuộc giữa các gói chỉ đi một chiều (kiểm bằng `go list`):
@@ -541,10 +542,29 @@ NODE_ID=node-1 LISTEN_ADDR=:8081 NODE_ADDR=http://localhost:8081 DATA_DIR=/tmp/n
 không cần đăng nhập và service ghi cảnh báo vào log. Request ghi (lưu, xóa, ngắt kết nối) đến từ
 trang web khác bị chặn bằng `http.CrossOriginProtection`, vì trình duyệt tự gửi kèm mật khẩu đã nhớ.
 
+Ảnh dưới chụp trên cụm compose lúc repair đang tạm dừng và node-2 vừa bị ngắt kết nối:
+
+![Trang control plane: cảnh báo node offline và repair tạm dừng, 13 segment còn 5/6 shard, node-2 offline](docs/images/ui-coordinator.png)
+
+*Tổng quan: cảnh báo ở đầu trang, biên an toàn còn 1 shard, 13 segment tụt xuống 5/6, node-2 `offline`.*
+
+![Bảng file và lưới shard của demo.bin: mỗi segment một hàng, ô gạch đỏ là shard trên node-2](docs/images/ui-coordinator-shards.png)
+
+*Bấm **Chi tiết** ở một file để xem từng shard nằm trên node nào; ô gạch đỏ là shard trên node đang offline.*
+
+![Cấu hình vận hành và hoạt động nền: heartbeat timeout, GC grace, tạm dừng repair/GC, bộ đếm, nút chạy ngay](docs/images/ui-coordinator-settings.png)
+
+*Cấu hình vận hành (lưu vào PostgreSQL) và hoạt động nền: bộ đếm, lượt chạy cuối, nút chạy ngay repair/GC.*
+
 Cấu hình sửa qua UI **thắng env** ở những lần khởi động sau: coordinator lưu trong PostgreSQL, node
 lưu vào `CONFIG_FILE` (trong compose là `/var/lib/dstore/node.json` — còn sau `docker compose
 restart`, mất khi container bị tạo lại). Những gì gắn với danh tính và dữ liệu — `NODE_ID`, nơi lưu
 shard, `DATABASE_URL`, chu kỳ các vòng lặp — UI chỉ hiển thị, đổi thì sửa env rồi restart.
+
+![Trang node-4: đã kết nối, form đổi coordinator, địa chỉ, dung lượng, nhịp heartbeat, nút ngắt kết nối](docs/images/ui-node.png)
+
+*Trang của một node: đổi coordinator, địa chỉ, dung lượng, nhịp heartbeat (lưu vào `CONFIG_FILE`),
+thử kết nối trước khi lưu, ngắt/nối lại heartbeat.*
 
 Trang là HTML + JavaScript thuần nhúng vào binary bằng `go:embed`: không có bước build frontend,
 không tải gì từ internet, tự làm mới mỗi 3 giây.
