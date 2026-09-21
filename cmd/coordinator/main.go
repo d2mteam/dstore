@@ -5,6 +5,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -15,6 +16,7 @@ import (
 	"dstore-demo/internal/pgdb"
 	"dstore-demo/internal/protocol"
 	"dstore-demo/internal/shardclient"
+	"dstore-demo/internal/webui"
 )
 
 func main() {
@@ -26,6 +28,7 @@ func main() {
 		healthEvery = envDuration("HEALTH_INTERVAL", 5*time.Second)
 		repairEvery = envDuration("REPAIR_INTERVAL", 10*time.Second)
 		gcEvery     = envDuration("GC_INTERVAL", 60*time.Second)
+		uiPassword  = env("UI_PASSWORD", "")
 	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -86,14 +89,35 @@ func main() {
 	api := &coordinator.Server{
 		Store: store, Placer: placer, Health: health, Shards: shards, Metrics: metrics, Log: log,
 	}
+	admin := &coordinator.Admin{
+		Store: store, Meta: meta, Settings: settings,
+		Repairer: repairer, Collector: collector, Metrics: metrics, Log: log,
+		Startup: coordinator.StartupInfo{
+			Listen:         listen,
+			Database:       describeDB(dbURL),
+			HealthInterval: protocol.Duration(healthEvery),
+			RepairInterval: protocol.Duration(repairEvery),
+			GCInterval:     protocol.Duration(gcEvery),
+			StartedAt:      time.Now(),
+		},
+	}
 
 	go health.Run(ctx)
 	go repairer.Run(ctx)
 	go collector.Run(ctx)
 
-	srv := &http.Server{Addr: listen, Handler: api.Routes()}
+	// API control plane giữ nguyên ở gốc; web UI và API riêng của nó nằm dưới /ui/.
+	mux := http.NewServeMux()
+	mux.Handle("/", api.Routes())
+	mux.Handle("/ui/", webui.Handler(webui.CoordinatorPage, admin.Routes(), uiPassword))
+	mux.Handle("GET /{$}", http.RedirectHandler("/ui/", http.StatusFound))
+	if uiPassword == "" {
+		log.Warn("chưa đặt UI_PASSWORD: ai vào được mạng này cũng mở được web UI")
+	}
+
+	srv := &http.Server{Addr: listen, Handler: mux}
 	go func() {
-		log.Info("coordinator nghe HTTP", "listen", listen,
+		log.Info("coordinator nghe HTTP", "listen", listen, "web_ui", "/ui/",
 			"heartbeat_timeout", cur.HeartbeatTimeout, "repair_interval", repairEvery,
 			"gc_interval", gcEvery, "gc_grace", cur.GCGrace)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -134,6 +158,18 @@ func openMetaStore(ctx context.Context, url string, log *slog.Logger) (coordinat
 		case <-time.After(time.Second):
 		}
 	}
+}
+
+// describeDB bỏ mật khẩu và tham số khỏi chuỗi kết nối để hiện trên web UI.
+func describeDB(dsn string) string {
+	if dsn == "" {
+		return "memory (restart là mất metadata)"
+	}
+	u, err := url.Parse(dsn)
+	if err != nil || u.Host == "" {
+		return "postgres" // dạng "host=... password=...": không đoán được phần nào an toàn để hiện
+	}
+	return "postgres://" + u.Host + u.Path
 }
 
 func env(key, def string) string {

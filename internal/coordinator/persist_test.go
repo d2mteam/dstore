@@ -116,6 +116,8 @@ var errDBDown = errors.New("mất kết nối tới DB")
 
 func (brokenMeta) SaveFile(context.Context, coordinator.FileRecord) error { return errDBDown }
 func (brokenMeta) DeleteFile(context.Context, string) error               { return errDBDown }
+func (brokenMeta) SaveSettings(context.Context, []byte) error             { return errDBDown }
+func (brokenMeta) Ping(context.Context) error                             { return errDBDown }
 
 // DB chết thì commit phải thất bại: client không được nhận "thành công" cho một
 // file mà coordinator restart là quên.
