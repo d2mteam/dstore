@@ -14,6 +14,7 @@ import (
 
 	"dstore-demo/internal/client"
 	"dstore-demo/internal/gateway"
+	"dstore-demo/internal/pgdb"
 )
 
 func main() {
@@ -40,8 +41,12 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Bảng chủ sở hữu giữ trong RAM: chỉ đúng khi chạy một bản gateway, restart là mất.
-	owners := gateway.NewMemoryOwners()
+	owners, closeOwners, err := openOwners(ctx, env("DATABASE_URL", ""), log)
+	if err != nil {
+		log.Error("không kết nối được DB", "err", err)
+		os.Exit(1)
+	}
+	defer closeOwners()
 
 	storage := client.New(coordURL, k, m, segmentSize, parallel, log)
 	srv := &http.Server{
@@ -66,6 +71,33 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	srv.Shutdown(shutdownCtx)
+}
+
+// openOwners kết nối PostgreSQL, chờ tới khi DB sẵn sàng. Không đặt
+// DATABASE_URL thì giữ bảng chủ sở hữu trong RAM — chỉ đúng khi chạy một bản.
+func openOwners(ctx context.Context, url string, log *slog.Logger) (gateway.Owners, func(), error) {
+	if url == "" {
+		log.Warn("chưa đặt DATABASE_URL: chủ sở hữu file chỉ nằm trong RAM, " +
+			"restart là mất và không chạy được nhiều bản gateway")
+		return gateway.NewMemoryOwners(), func() {}, nil
+	}
+	cfg := pgdb.Config{URL: url, IAMAuth: env("DB_IAM_AUTH", "false") == "true"}
+	if env("DB_AUTO_MIGRATE", "true") == "true" {
+		cfg.Schema = gateway.OwnersSchema
+	}
+	for attempt := 1; ; attempt++ {
+		pool, err := pgdb.Open(ctx, cfg)
+		if err == nil {
+			log.Info("đã kết nối PostgreSQL", "iam_auth", cfg.IAMAuth, "auto_migrate", cfg.Schema != "")
+			return gateway.NewPostgresOwners(pool), pool.Close, nil
+		}
+		log.Warn("chưa kết nối được PostgreSQL, thử lại", "attempt", attempt, "err", err)
+		select {
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
 }
 
 func env(key, def string) string {
