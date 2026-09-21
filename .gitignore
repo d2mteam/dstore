@@ -7,3 +7,5 @@ deploy/work/*
 
 # Tài liệu markdown không theo dõi trong git
 *.md
+# ...trừ README của dự án
+!/README.md
