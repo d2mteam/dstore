@@ -36,6 +36,7 @@ type Storage interface {
 type Server struct {
 	Storage Storage
 	Keys    Keys
+	Owners  Owners
 	Log     *slog.Logger
 
 	// MaxUploadBytes chặn file quá lớn ngay từ header, không đọc body.
@@ -44,21 +45,20 @@ type Server struct {
 	// tải đột biến không dập chết các node phía sau.
 	MaxConcurrent int
 
-	files *registry
 	slots chan struct{}
 }
 
-func New(storage Storage, keys Keys, maxUpload int64, maxConcurrent int, log *slog.Logger) *Server {
+func New(storage Storage, keys Keys, owners Owners, maxUpload int64, maxConcurrent int, log *slog.Logger) *Server {
 	if maxConcurrent <= 0 {
 		maxConcurrent = 32
 	}
 	return &Server{
 		Storage:        storage,
 		Keys:           keys,
+		Owners:         owners,
 		Log:            log,
 		MaxUploadBytes: maxUpload,
 		MaxConcurrent:  maxConcurrent,
-		files:          newRegistry(),
 		slots:          make(chan struct{}, maxConcurrent),
 	}
 }
@@ -169,7 +169,17 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, tenant string) {
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
-	s.files.put(fileID, fileMeta{Tenant: tenant, Name: name, ContentType: contentType})
+	meta := FileMeta{Tenant: tenant, Name: name, ContentType: contentType}
+	if err := s.Owners.Put(r.Context(), fileID, meta); err != nil {
+		// Không ghi được chủ sở hữu thì file thành vô chủ, không ai đọc được nữa:
+		// xóa luôn cho sạch thay vì để rác trong hệ thống.
+		s.Log.Error("không lưu được chủ sở hữu file", "file", fileID, "err", err)
+		if delErr := s.Storage.Delete(context.WithoutCancel(r.Context()), fileID); delErr != nil {
+			s.Log.Error("xóa file vô chủ lỗi", "file", fileID, "err", delErr)
+		}
+		writeError(w, http.StatusServiceUnavailable, "không lưu được metadata, thử lại sau")
+		return
+	}
 
 	w.Header().Set("Location", "/v1/files/"+fileID)
 	writeJSON(w, http.StatusCreated, map[string]any{
@@ -179,10 +189,8 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, tenant string) {
 
 func (s *Server) download(w http.ResponseWriter, r *http.Request, tenant string) {
 	fileID := r.PathValue("id")
-	meta, ok := s.files.get(fileID, tenant)
+	meta, ok := s.owned(w, r, fileID, tenant)
 	if !ok {
-		// Trả 404 chứ không phải 403: người ngoài không nên biết file có tồn tại.
-		writeError(w, http.StatusNotFound, "không có file này")
 		return
 	}
 
@@ -233,7 +241,11 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request, tenant string) {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	owned := s.files.ownedBy(tenant)
+	owned, err := s.Owners.OwnedBy(r.Context(), tenant)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "không đọc được metadata, thử lại sau")
+		return
+	}
 
 	out := make([]map[string]any, 0, len(owned))
 	for _, f := range files {
@@ -251,16 +263,34 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request, tenant string) {
 
 func (s *Server) deleteFile(w http.ResponseWriter, r *http.Request, tenant string) {
 	fileID := r.PathValue("id")
-	if _, ok := s.files.get(fileID, tenant); !ok {
-		writeError(w, http.StatusNotFound, "không có file này")
+	if _, ok := s.owned(w, r, fileID, tenant); !ok {
 		return
 	}
 	if err := s.Storage.Delete(r.Context(), fileID); err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	s.files.remove(fileID)
+	if err := s.Owners.Remove(r.Context(), fileID); err != nil {
+		// Dữ liệu đã xóa; dòng chủ sở hữu sót lại chỉ làm file hiện trong danh
+		// sách tới khi coordinator trả 404 cho nó.
+		s.Log.Warn("không xóa được chủ sở hữu file", "file", fileID, "err", err)
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// owned kiểm tra file có thuộc tenant không; nếu không thì tự trả lỗi.
+func (s *Server) owned(w http.ResponseWriter, r *http.Request, fileID, tenant string) (FileMeta, bool) {
+	meta, ok, err := s.Owners.Get(r.Context(), fileID, tenant)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "không đọc được metadata, thử lại sau")
+		return FileMeta{}, false
+	}
+	if !ok {
+		// Trả 404 chứ không phải 403: người ngoài không nên biết file có tồn tại.
+		writeError(w, http.StatusNotFound, "không có file này")
+		return FileMeta{}, false
+	}
+	return meta, true
 }
 
 // --- Helper ---

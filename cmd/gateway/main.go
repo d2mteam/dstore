@@ -37,16 +37,19 @@ func main() {
 		os.Exit(1)
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// Bảng chủ sở hữu giữ trong RAM: chỉ đúng khi chạy một bản gateway, restart là mất.
+	owners := gateway.NewMemoryOwners()
+
 	storage := client.New(coordURL, k, m, segmentSize, parallel, log)
 	srv := &http.Server{
 		Addr:    listen,
-		Handler: gateway.New(storage, keys, maxUpload, maxConcurrent, log).Routes(),
+		Handler: gateway.New(storage, keys, owners, maxUpload, maxConcurrent, log).Routes(),
 		// Upload file lớn có thể lâu, nên chỉ đặt hạn cho lúc đọc header.
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	go func() {
 		log.Info("gateway nghe HTTP", "listen", listen, "coordinator", coordURL,

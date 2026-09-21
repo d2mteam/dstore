@@ -1,58 +1,77 @@
 package gateway
 
-import "sync"
+import (
+	"context"
+	"sync"
+)
 
-// fileMeta là phần metadata chỉ gateway quan tâm: file thuộc về ai và trả về
+// FileMeta là phần metadata chỉ gateway quan tâm: file thuộc về ai và trả về
 // với Content-Type nào. Coordinator không biết tới khái niệm tenant.
-type fileMeta struct {
+type FileMeta struct {
 	Tenant      string
 	Name        string
 	ContentType string
 }
 
-// registry giữ quyền sở hữu file trong bộ nhớ. Gateway restart là mất, giống
-// coordinator; bản thật để cùng chỗ với metadata file.
-type registry struct {
+// Owners ghi nhớ file nào thuộc tenant nào.
+//
+// Gateway chạy nhiều bản song song (nó nằm trên đường dữ liệu nên phải scale
+// ngang), upload qua bản này rồi tải qua bản khác là chuyện thường. Vì vậy bảng
+// này phải nằm ở chỗ dùng chung — PostgreSQL — chứ không phải RAM của từng bản.
+type Owners interface {
+	Put(ctx context.Context, fileID string, meta FileMeta) error
+	// Get trả về metadata nếu file thuộc về tenant này.
+	Get(ctx context.Context, fileID, tenant string) (FileMeta, bool, error)
+	Remove(ctx context.Context, fileID string) error
+	// OwnedBy trả về file_id -> metadata của mọi file thuộc tenant.
+	OwnedBy(ctx context.Context, tenant string) (map[string]FileMeta, error)
+}
+
+// --- Bộ nhớ ---
+
+// MemoryOwners giữ bảng trong RAM: dùng cho test, và khi chỉ chạy một bản
+// gateway không có DB (restart là mất).
+type MemoryOwners struct {
 	mu    sync.RWMutex
-	files map[string]fileMeta
+	files map[string]FileMeta
 }
 
-func newRegistry() *registry {
-	return &registry{files: make(map[string]fileMeta)}
+func NewMemoryOwners() *MemoryOwners {
+	return &MemoryOwners{files: make(map[string]FileMeta)}
 }
 
-func (r *registry) put(fileID string, meta fileMeta) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.files[fileID] = meta
+func (m *MemoryOwners) Put(_ context.Context, fileID string, meta FileMeta) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.files[fileID] = meta
+	return nil
 }
 
-// get trả về metadata nếu file thuộc về tenant này.
-func (r *registry) get(fileID, tenant string) (fileMeta, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	meta, ok := r.files[fileID]
+func (m *MemoryOwners) Get(_ context.Context, fileID, tenant string) (FileMeta, bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	meta, ok := m.files[fileID]
 	if !ok || meta.Tenant != tenant {
-		return fileMeta{}, false
+		return FileMeta{}, false, nil
 	}
-	return meta, true
+	return meta, true, nil
 }
 
-func (r *registry) remove(fileID string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(r.files, fileID)
+func (m *MemoryOwners) Remove(_ context.Context, fileID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.files, fileID)
+	return nil
 }
 
-// ownedBy lọc ra các file của một tenant.
-func (r *registry) ownedBy(tenant string) map[string]fileMeta {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	out := make(map[string]fileMeta)
-	for id, meta := range r.files {
+func (m *MemoryOwners) OwnedBy(_ context.Context, tenant string) (map[string]FileMeta, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make(map[string]FileMeta)
+	for id, meta := range m.files {
 		if meta.Tenant == tenant {
 			out[id] = meta
 		}
 	}
-	return out
+	return out, nil
 }

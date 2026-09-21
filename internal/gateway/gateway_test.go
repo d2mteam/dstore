@@ -30,7 +30,7 @@ func start(t *testing.T) *httptest.Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gw := gateway.New(storage, keys, 1<<20, 8, slog.New(slog.DiscardHandler))
+	gw := gateway.New(storage, keys, gateway.NewMemoryOwners(), 1<<20, 8, slog.New(slog.DiscardHandler))
 
 	srv := httptest.NewServer(gw.Routes())
 	t.Cleanup(srv.Close)
