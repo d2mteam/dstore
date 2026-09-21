@@ -3,15 +3,16 @@ COMPOSE := docker compose -f deploy/docker-compose.yml
 DOCKER_USER := $(shell id -u):$(shell id -g)
 WORK := deploy/work
 
-.PHONY: help build dist test race up down logs ps nodes ls put get demo-file chaos clean
+.PHONY: help build dist test race up down logs ps nodes ls put get demo-file chaos sim clean
 
 help: ## In danh sách lệnh
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  make %-12s %s\n", $$1, $$2}'
 
-build: ## Build 3 binary cho máy hiện tại, ra thư mục bin/
+build: ## Build binary cho máy hiện tại, ra thư mục bin/
 	go build -o bin/coordinator ./cmd/coordinator
 	go build -o bin/node ./cmd/node
 	go build -o bin/dsctl ./cmd/dsctl
+	go build -o bin/simulator ./cmd/simulator
 
 dist: ## Build binary tĩnh cho Linux vào bin/linux/ (image Docker dùng bản này)
 	CGO_ENABLED=0 GOOS=linux go build -o bin/linux/coordinator ./cmd/coordinator
@@ -57,6 +58,11 @@ get: ## Tải file: make get ID=<file_id> OUT=out.bin
 
 chaos: ## Tắt/bật node ngẫu nhiên trong 2 phút
 	./scripts/chaos.sh 120
+
+sim: ## Mô phỏng nghìn node để chọn k/m và ngưỡng repair
+	go run ./cmd/simulator -compare km
+	go run ./cmd/simulator -compare threshold
+	go run ./cmd/simulator -compare bandwidth
 
 clean: ## Xóa binary và file demo
 	rm -rf bin $(WORK)/*.bin
