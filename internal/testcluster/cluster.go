@@ -100,14 +100,10 @@ func (c *Cluster) startNode(id, dir string) {
 	srv := httptest.NewServer((&node.Server{ID: id, Store: store, Log: c.log}).Routes())
 
 	ctx, cancel := context.WithCancel(context.Background())
-	reporter := &node.Reporter{
-		CoordinatorURL: c.URL, NodeID: id, Addr: srv.URL,
-		Capacity: 1 << 30, Interval: HeartbeatEvery, Store: store, Log: c.log,
-	}
-	if err := reporter.Register(ctx); err != nil {
-		cancel()
-		c.t.Fatal(err)
-	}
+	reporter := node.NewReporter(id, node.Settings{
+		CoordinatorURL: c.URL, Addr: srv.URL, Capacity: 1 << 30,
+		HeartbeatInterval: protocol.Duration(HeartbeatEvery),
+	}, store, c.log)
 	go reporter.Run(ctx)
 
 	n := &testNode{id: id, dir: dir, srv: srv, store: store, stopHB: cancel}
@@ -118,6 +114,22 @@ func (c *Cluster) startNode(id, dir string) {
 			srv.Close()
 		}
 	})
+	c.waitRegistered(id, srv.URL)
+}
+
+// waitRegistered chờ coordinator nhận đăng ký của node ở đúng địa chỉ mới.
+// Chỉ chờ "online" là chưa đủ: node vừa restart có thể vẫn đang online với
+// địa chỉ cũ vì coordinator chưa kịp phát hiện nó đã tắt.
+func (c *Cluster) waitRegistered(id, addr string) {
+	c.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if n, ok := c.Store.Node(id); ok && n.Addr == addr && n.Status == protocol.NodeOnline {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	c.t.Fatalf("node %s không đăng ký được với coordinator trong 5s", id)
 }
 
 // StopNode mô phỏng `docker stop node-x`: node ngừng phục vụ và ngừng heartbeat,
