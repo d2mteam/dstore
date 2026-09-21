@@ -16,6 +16,8 @@ type Server struct {
 	Log   *slog.Logger
 }
 
+// Routes trả handler của API shard: PUT/GET/HEAD/DELETE /shards/{hash},
+// GET /shards và GET /healthz.
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("PUT /shards/{hash}", s.putShard)

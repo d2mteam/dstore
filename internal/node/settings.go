@@ -31,6 +31,8 @@ func (s Settings) Clean() Settings {
 	return s
 }
 
+// Validate kiểm tra hai URL có dạng http(s)://host, dung lượng dương và nhịp
+// heartbeat từ 100ms trở lên. Gọi sau Clean.
 func (s Settings) Validate() error {
 	if err := checkURL(s.CoordinatorURL); err != nil {
 		return fmt.Errorf("coordinator_url: %w", err)

@@ -1,5 +1,3 @@
-// Package shardclient nói chuyện HTTP với node để đọc/ghi shard.
-// Cả dsctl (upload/download) và coordinator (repair) đều dùng chung gói này.
 package shardclient
 
 import (
@@ -14,10 +12,12 @@ import (
 	"dstore-demo/internal/ec"
 )
 
+// Client gọi API shard của node qua HTTP; dùng chung được giữa nhiều goroutine.
 type Client struct {
 	HTTP *http.Client
 }
 
+// New tạo Client với timeout cho mỗi request.
 func New(timeout time.Duration) *Client {
 	return &Client{HTTP: &http.Client{Timeout: timeout}}
 }
@@ -89,6 +89,8 @@ func (c *Client) List(ctx context.Context, nodeAddr string) ([]string, error) {
 	return hashes, nil
 }
 
+// Delete xóa shard trên node. Node trả 404 (không có shard) cũng coi là thành
+// công: shard đằng nào cũng không còn.
 func (c *Client) Delete(ctx context.Context, nodeAddr, hash string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, nodeAddr+"/shards/"+hash, nil)
 	if err != nil {

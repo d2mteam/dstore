@@ -1,5 +1,3 @@
-// Package pgtest mở PostgreSQL cho test trong một schema riêng, xóa sạch khi
-// test xong — nên chạy được cả trên DB đang có dữ liệu.
 package pgtest
 
 import (

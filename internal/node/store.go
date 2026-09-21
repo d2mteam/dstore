@@ -23,6 +23,8 @@ type ShardStore interface {
 	Stats() (used int64, count int)
 }
 
+// Các lỗi mà mọi ShardStore trả về giống nhau; Server quy chúng ra mã HTTP
+// 404, 400, 400 và 413.
 var (
 	ErrNotFound     = errors.New("không có shard này")
 	ErrInvalidHash  = errors.New("hash không hợp lệ")

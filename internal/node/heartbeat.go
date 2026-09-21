@@ -51,6 +51,8 @@ type ConnStatus struct {
 	Failures    int       `json:"failures"` // số lần lỗi liên tiếp
 }
 
+// NewReporter tạo Reporter cho node nodeID với cấu hình ban đầu s. Reporter chưa
+// làm gì cho tới khi gọi Run; store chỉ dùng để đọc Stats gửi kèm heartbeat.
 func NewReporter(nodeID string, s Settings, store ShardStore, log *slog.Logger) *Reporter {
 	return &Reporter{
 		nodeID:   nodeID,
@@ -62,12 +64,14 @@ func NewReporter(nodeID string, s Settings, store ShardStore, log *slog.Logger) 
 	}
 }
 
+// Settings trả cấu hình kết nối đang dùng.
 func (r *Reporter) Settings() Settings {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.settings
 }
 
+// Status trả tình trạng kết nối hiện tại, để web UI hiển thị.
 func (r *Reporter) Status() ConnStatus {
 	r.mu.Lock()
 	defer r.mu.Unlock()

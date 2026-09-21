@@ -163,6 +163,7 @@ func (s *S3Store) Put(ctx context.Context, hash string, r io.Reader) error {
 	return nil
 }
 
+// Open trả body của object dưới dạng stream; trả ErrNotFound nếu không có.
 func (s *S3Store) Open(ctx context.Context, hash string) (io.ReadCloser, int64, error) {
 	if !validHash(hash) {
 		return nil, 0, fmt.Errorf("%w: %q", ErrInvalidHash, hash)
@@ -179,6 +180,7 @@ func (s *S3Store) Open(ctx context.Context, hash string) (io.ReadCloser, int64, 
 	return out.Body, aws.ToInt64(out.ContentLength), nil
 }
 
+// Has hỏi S3 bằng HeadObject, không tải nội dung.
 func (s *S3Store) Has(ctx context.Context, hash string) bool {
 	if !validHash(hash) {
 		return false
@@ -189,6 +191,7 @@ func (s *S3Store) Has(ctx context.Context, hash string) bool {
 	return err == nil
 }
 
+// Delete xóa object; trả ErrNotFound nếu không có.
 func (s *S3Store) Delete(ctx context.Context, hash string) error {
 	if !validHash(hash) {
 		return fmt.Errorf("%w: %q", ErrInvalidHash, hash)
@@ -217,6 +220,7 @@ func (s *S3Store) Delete(ctx context.Context, hash string) error {
 	return nil
 }
 
+// List liệt kê object dưới prefix của node, mỗi lượt gọi S3 được 1000 object.
 func (s *S3Store) List(ctx context.Context) ([]string, error) {
 	var hashes []string
 	pages := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
@@ -236,6 +240,7 @@ func (s *S3Store) List(ctx context.Context) ([]string, error) {
 	return hashes, nil
 }
 
+// Stats trả số byte và số shard đang giữ, đếm sẵn trong RAM nên không gọi S3.
 func (s *S3Store) Stats() (used int64, count int) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

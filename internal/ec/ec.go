@@ -1,5 +1,3 @@
-// Package ec bọc thư viện reedsolomon cho đúng nhu cầu của demo:
-// mã hóa một segment thành k+m shard và ghép ngược lại khi thiếu shard.
 package ec
 
 import (
@@ -18,6 +16,8 @@ type Coder struct {
 	enc reedsolomon.Encoder
 }
 
+// New tạo Coder cho k data shard và m parity shard; k và m phải > 0.
+// Coder dùng chung được giữa nhiều goroutine.
 func New(k, m int) (*Coder, error) {
 	if k <= 0 || m <= 0 {
 		return nil, fmt.Errorf("ec: k và m phải > 0 (k=%d, m=%d)", k, m)

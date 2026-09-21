@@ -1,11 +1,3 @@
-// Package pgdb mở kết nối PostgreSQL dùng chung cho coordinator và gateway.
-// Chạy được với Postgres tự dựng lẫn Amazon RDS / Aurora PostgreSQL:
-//
-//   - TLS: đặt trong DATABASE_URL, ví dụ
-//     ?sslmode=verify-full&sslrootcert=/etc/ssl/rds-global-bundle.pem
-//   - Đăng nhập bằng IAM thay cho mật khẩu tĩnh: bật IAMAuth.
-//   - Sau RDS Proxy: thêm default_query_exec_mode=exec vào URL để tránh bị
-//     ghim phiên vì prepared statement.
 package pgdb
 
 import (
@@ -19,6 +11,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// Config là cấu hình kết nối cho [Open]. URL theo cú pháp của pgx, ví dụ
+// postgres://user:pass@host:5432/db?sslmode=verify-full.
 type Config struct {
 	URL string
 
