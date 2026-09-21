@@ -271,13 +271,6 @@ func (s *Store) CommitFile(ctx context.Context, id string, segments []protocol.C
 	return nil
 }
 
-func (s *Store) File(id string) (*File, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	f, ok := s.files[id]
-	return f, ok
-}
-
 // Manifest dựng bản sao metadata để client tải file.
 func (s *Store) Manifest(id string) (protocol.Manifest, bool) {
 	s.mu.RLock()
