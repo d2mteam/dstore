@@ -14,8 +14,7 @@ import (
 	"dstore-demo/internal/protocol"
 )
 
-// Upload chia file thành segment, encode mỗi segment thành k+m shard rồi đẩy
-// song song lên các node do coordinator chỉ định. File chỉ tồn tại sau khi commit.
+// Upload đẩy một file trên đĩa lên hệ thống.
 func (c *Client) Upload(ctx context.Context, path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -27,7 +26,16 @@ func (c *Client) Upload(ctx context.Context, path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return c.UploadStream(ctx, filepath.Base(path), info.Size(), f)
+}
 
+// UploadStream đọc size byte từ r, chia thành segment, encode mỗi segment thành
+// k+m shard rồi đẩy song song lên các node do coordinator chỉ định. File chỉ tồn
+// tại sau khi commit.
+//
+// Phải biết trước size vì coordinator cần số segment để lập kế hoạch đặt shard.
+// Mỗi lúc chỉ giữ một segment trong bộ nhớ, nên gateway stream được file lớn.
+func (c *Client) UploadStream(ctx context.Context, name string, size int64, r io.Reader) (string, error) {
 	coder, err := ec.New(c.K, c.M)
 	if err != nil {
 		return "", err
@@ -36,7 +44,7 @@ func (c *Client) Upload(ctx context.Context, path string) (string, error) {
 	// 1. Xin kế hoạch đặt shard.
 	var plan protocol.PlanResponse
 	req := protocol.PlanRequest{
-		Name: filepath.Base(path), Size: info.Size(),
+		Name: name, Size: size,
 		K: c.K, M: c.M, SegmentSize: c.SegmentSize,
 	}
 	if err := c.call(ctx, http.MethodPost, "/files/plan", req, &plan); err != nil {
@@ -48,7 +56,7 @@ func (c *Client) Upload(ctx context.Context, path string) (string, error) {
 	commit := protocol.CommitRequest{Segments: make([]protocol.CommitSegment, 0, len(plan.Segments))}
 	buf := make([]byte, c.SegmentSize)
 	for _, segPlan := range plan.Segments {
-		n, err := io.ReadFull(f, buf)
+		n, err := io.ReadFull(r, buf)
 		if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
 			return "", fmt.Errorf("đọc segment %d: %w", segPlan.Index, err)
 		}

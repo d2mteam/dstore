@@ -3,30 +3,58 @@ package client
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 
 	"dstore-demo/internal/ec"
 	"dstore-demo/internal/protocol"
 )
 
-// Download lấy manifest rồi tải về; mỗi segment chỉ cần k shard bất kỳ.
+// Download lấy manifest rồi ghi toàn bộ file ra đĩa.
 func (c *Client) Download(ctx context.Context, fileID, outPath string) error {
-	man, err := c.Manifest(ctx, fileID)
-	if err != nil {
-		return err
-	}
-	coder, err := ec.New(man.K, man.M)
-	if err != nil {
-		return err
-	}
-
 	out, err := os.Create(outPath)
 	if err != nil {
 		return err
 	}
 	defer out.Close()
 
+	if err := c.DownloadTo(ctx, fileID, out); err != nil {
+		return err
+	}
+	return out.Close()
+}
+
+// DownloadTo ghi toàn bộ nội dung file vào w.
+func (c *Client) DownloadTo(ctx context.Context, fileID string, w io.Writer) error {
+	man, err := c.Manifest(ctx, fileID)
+	if err != nil {
+		return err
+	}
+	return c.WriteRange(ctx, man, 0, man.Size-1, w)
+}
+
+// WriteRange ghi đoạn byte [start, end] của file vào w; mỗi segment chỉ cần k
+// shard bất kỳ. Segment nằm ngoài khoảng yêu cầu bị bỏ qua hoàn toàn — nhờ vậy
+// đọc một đoạn giữa file lớn không phải tải cả file về.
+func (c *Client) WriteRange(ctx context.Context, man protocol.Manifest, start, end int64, w io.Writer) error {
+	if man.Size == 0 {
+		return nil
+	}
+	if start < 0 || end >= man.Size || start > end {
+		return fmt.Errorf("khoảng [%d, %d] nằm ngoài file %d byte", start, end, man.Size)
+	}
+	coder, err := ec.New(man.K, man.M)
+	if err != nil {
+		return err
+	}
+
+	segSize := int64(man.SegmentSize)
+	first, last := start/segSize, end/segSize
 	for _, seg := range man.Segments {
+		i := int64(seg.Index)
+		if i < first || i > last {
+			continue
+		}
 		shards, err := c.fetchSegment(ctx, coder, seg)
 		if err != nil {
 			return fmt.Errorf("segment %d: %w", seg.Index, err)
@@ -35,11 +63,21 @@ func (c *Client) Download(ctx context.Context, fileID, outPath string) error {
 		if err != nil {
 			return fmt.Errorf("segment %d: %w", seg.Index, err)
 		}
-		if _, err := out.Write(data); err != nil {
+
+		// Cắt phần thừa ở segment đầu và segment cuối của khoảng.
+		segStart := i * segSize
+		from, to := int64(0), int64(len(data))
+		if start > segStart {
+			from = start - segStart
+		}
+		if end-segStart+1 < to {
+			to = end - segStart + 1
+		}
+		if _, err := w.Write(data[from:to]); err != nil {
 			return err
 		}
 	}
-	return out.Close()
+	return nil
 }
 
 // fetchSegment tải song song mọi shard của segment và dừng ngay khi đủ k shard;
