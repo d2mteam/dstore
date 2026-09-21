@@ -3,12 +3,17 @@ package node
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
+
+	"github.com/minio/minio-go/v7"
 
 	"dstore-demo/internal/ec"
 )
@@ -20,7 +25,8 @@ type backend struct {
 	open func(t *testing.T) (store ShardStore, reopen func() ShardStore)
 }
 
-// backends trả về mọi backend cần test.
+// backends trả về mọi backend cần test. MinIO chỉ chạy khi có
+// DSTORE_TEST_S3_ENDPOINT (xem `make test-integration`).
 func backends(t *testing.T) []backend {
 	list := []backend{{
 		name: "disk",
@@ -40,7 +46,48 @@ func backends(t *testing.T) []backend {
 		},
 	}}
 
-	return list
+	endpoint := os.Getenv("DSTORE_TEST_S3_ENDPOINT")
+	if endpoint == "" {
+		t.Log("bỏ qua backend MinIO: chưa đặt DSTORE_TEST_S3_ENDPOINT")
+		return list
+	}
+	return append(list, backend{
+		name: "minio",
+		open: func(t *testing.T) (ShardStore, func() ShardStore) {
+			cfg := S3Config{
+				Endpoint:  endpoint,
+				AccessKey: os.Getenv("DSTORE_TEST_S3_ACCESS_KEY"),
+				SecretKey: os.Getenv("DSTORE_TEST_S3_SECRET_KEY"),
+				Bucket:    "test-" + randomHex(6), // mỗi test một bucket riêng
+			}
+			store, err := NewS3Store(context.Background(), cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { removeBucket(store) })
+			return store, func() ShardStore {
+				s, err := NewS3Store(context.Background(), cfg)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return s
+			}
+		},
+	})
+}
+
+func removeBucket(s *S3Store) {
+	ctx := context.Background()
+	for obj := range s.client.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{Recursive: true}) {
+		s.client.RemoveObject(ctx, s.bucket, obj.Key, minio.RemoveObjectOptions{})
+	}
+	s.client.RemoveBucket(ctx, s.bucket)
+}
+
+func randomHex(n int) string {
+	b := make([]byte, n)
+	rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 func serve(t *testing.T, store ShardStore) *httptest.Server {
