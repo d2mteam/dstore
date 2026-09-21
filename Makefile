@@ -3,7 +3,7 @@ COMPOSE := docker compose -f deploy/docker-compose.yml
 DOCKER_USER := $(shell id -u):$(shell id -g)
 WORK := deploy/work
 
-.PHONY: help build dist test race up down logs ps nodes ls put get demo-file chaos watch sim clean
+.PHONY: help build dist test test-integration race up down logs ps nodes ls put get demo-file chaos watch sim clean
 
 help: ## In danh sách lệnh
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  make %-12s %s\n", $$1, $$2}'
@@ -23,6 +23,20 @@ dist: ## Build binary tĩnh cho Linux vào bin/linux/ (image Docker dùng bản 
 
 test: ## Chạy toàn bộ test
 	go test ./...
+
+# Container riêng cho test, không đụng tới cụm của `make up`.
+TEST_ENV := AWS_ACCESS_KEY_ID=dstore AWS_SECRET_ACCESS_KEY=dstore-secret AWS_REGION=us-east-1 \
+	DSTORE_TEST_S3_ENDPOINT=http://localhost:19000 \
+	DSTORE_TEST_DATABASE_URL=postgres://dstore:dstore@localhost:15432/dstore
+
+test-integration: ## Chạy cả test cần MinIO và PostgreSQL thật (tự bật container)
+	@docker start dstore-dev-minio >/dev/null 2>&1 || docker run -d --name dstore-dev-minio -p 19000:9000 \
+		-e MINIO_ROOT_USER=dstore -e MINIO_ROOT_PASSWORD=dstore-secret quay.io/minio/minio:latest server /data
+	@docker start dstore-dev-pg >/dev/null 2>&1 || docker run -d --name dstore-dev-pg -p 15432:5432 \
+		-e POSTGRES_USER=dstore -e POSTGRES_PASSWORD=dstore -e POSTGRES_DB=dstore postgres:16-alpine
+	@until curl -sf localhost:19000/minio/health/live >/dev/null && \
+		docker exec dstore-dev-pg pg_isready -U dstore >/dev/null 2>&1; do sleep 1; done
+	$(TEST_ENV) go test -count=1 ./...
 
 race: ## Chạy test kèm race detector
 	go test -race ./...

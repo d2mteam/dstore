@@ -1,6 +1,9 @@
 name: dstore-demo
 
-# Cấu hình chung cho 8 node; mỗi node chỉ khác NODE_ID, NODE_ADDR và volume.
+# Cấu hình chung cho 8 node; mỗi node chỉ khác NODE_ID và NODE_ADDR.
+# Shard nằm trong MinIO, bucket dùng chung, mỗi node một prefix nodes/<id>/.
+# Đổi sang Amazon S3: bỏ S3_ENDPOINT, S3_FORCE_PATH_STYLE, S3_CREATE_BUCKET và
+# khóa tĩnh — node tự lấy quyền từ IAM role.
 x-node: &node
   image: dstore-demo:latest
   build:
@@ -8,23 +11,61 @@ x-node: &node
   restart: unless-stopped
   depends_on:
     - coordinator
+    - minio
   environment: &node-env
     COORDINATOR_URL: http://coordinator:9000
-    DATA_DIR: /data
     LISTEN_ADDR: ":8080"
     CAPACITY_BYTES: "536870912" # 512 MB mỗi node
     HEARTBEAT_INTERVAL: 5s
+    STORAGE: s3
+    S3_BUCKET: dstore-shards
+    S3_ENDPOINT: http://minio:9000
+    S3_FORCE_PATH_STYLE: "true"
+    S3_CREATE_BUCKET: "true"
+    AWS_REGION: us-east-1
+    AWS_ACCESS_KEY_ID: dstore
+    AWS_SECRET_ACCESS_KEY: dstore-secret
   command: ["/app/node"]
 
+# Chuỗi kết nối PostgreSQL dùng chung. Đổi sang Amazon RDS: thay host, đặt
+# sslmode=verify-full&sslrootcert=..., và DB_IAM_AUTH=true nếu đăng nhập bằng IAM.
+x-database-url: &database-url postgres://dstore:dstore@postgres:5432/dstore?sslmode=disable
+
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_USER: dstore
+      POSTGRES_PASSWORD: dstore
+      POSTGRES_DB: dstore
+    volumes: ["pg-data:/var/lib/postgresql/data"]
+    ports:
+      - "5433:5432" # để xem metadata từ máy host bằng psql
+
+  minio:
+    # Docker Hub không còn image minio/minio; bản chính thức nằm trên quay.io.
+    image: quay.io/minio/minio:latest
+    container_name: minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: dstore
+      MINIO_ROOT_PASSWORD: dstore-secret
+    volumes: ["minio-data:/data"]
+    ports:
+      - "19001:9001" # giao diện web của MinIO: http://localhost:19001, đăng nhập dstore / dstore-secret
+
   coordinator:
     image: dstore-demo:latest
     build:
       context: ..
     container_name: coordinator
     command: ["/app/coordinator"]
+    depends_on:
+      - postgres
     environment:
       LISTEN_ADDR: ":9000"
+      DATABASE_URL: *database-url
       HEALTH_INTERVAL: 5s
       HEARTBEAT_TIMEOUT: 20s
       REPAIR_INTERVAL: 10s
@@ -33,7 +74,7 @@ services:
     ports:
       - "9000:9000" # để xem API từ máy host, ví dụ curl localhost:9000/nodes
 
-  # Gateway là thành phần duy nhất mở ra ngoài; coordinator và node nằm trong
+  # Gateway là cửa vào cho ứng dụng bên ngoài; coordinator và node nằm trong
   # mạng nội bộ của compose.
   gateway:
     image: dstore-demo:latest
@@ -43,9 +84,11 @@ services:
     command: ["/app/gateway"]
     depends_on:
       - coordinator
+      - postgres
     environment:
       LISTEN_ADDR: ":8000"
       COORDINATOR_URL: http://coordinator:9000
+      DATABASE_URL: *database-url
       API_KEYS: "demo-key:demo,app-b-key:app-b"
       EC_K: "4"
       EC_M: "2"
@@ -62,7 +105,6 @@ services:
       <<: *node-env
       NODE_ID: node-1
       NODE_ADDR: http://node-1:8080
-    volumes: ["node-1-data:/data"]
 
   node-2:
     <<: *node
@@ -71,7 +113,6 @@ services:
       <<: *node-env
       NODE_ID: node-2
       NODE_ADDR: http://node-2:8080
-    volumes: ["node-2-data:/data"]
 
   node-3:
     <<: *node
@@ -80,7 +121,6 @@ services:
       <<: *node-env
       NODE_ID: node-3
       NODE_ADDR: http://node-3:8080
-    volumes: ["node-3-data:/data"]
 
   node-4:
     <<: *node
@@ -89,7 +129,6 @@ services:
       <<: *node-env
       NODE_ID: node-4
       NODE_ADDR: http://node-4:8080
-    volumes: ["node-4-data:/data"]
 
   node-5:
     <<: *node
@@ -98,7 +137,6 @@ services:
       <<: *node-env
       NODE_ID: node-5
       NODE_ADDR: http://node-5:8080
-    volumes: ["node-5-data:/data"]
 
   node-6:
     <<: *node
@@ -107,7 +145,6 @@ services:
       <<: *node-env
       NODE_ID: node-6
       NODE_ADDR: http://node-6:8080
-    volumes: ["node-6-data:/data"]
 
   node-7:
     <<: *node
@@ -116,7 +153,6 @@ services:
       <<: *node-env
       NODE_ID: node-7
       NODE_ADDR: http://node-7:8080
-    volumes: ["node-7-data:/data"]
 
   node-8:
     <<: *node
@@ -125,7 +161,6 @@ services:
       <<: *node-env
       NODE_ID: node-8
       NODE_ADDR: http://node-8:8080
-    volumes: ["node-8-data:/data"]
 
   # dsctl phải chạy trong mạng Docker vì nó nói chuyện thẳng với node
   # qua tên container (http://node-1:8080). Chạy bằng:
@@ -142,11 +177,5 @@ services:
       - ./work:/work # đặt file cần upload vào deploy/work/
 
 volumes:
-  node-1-data:
-  node-2-data:
-  node-3-data:
-  node-4-data:
-  node-5-data:
-  node-6-data:
-  node-7-data:
-  node-8-data:
+  pg-data:
+  minio-data:
