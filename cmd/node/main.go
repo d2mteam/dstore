@@ -14,6 +14,7 @@ import (
 
 	"dstore-demo/internal/node"
 	"dstore-demo/internal/protocol"
+	"dstore-demo/internal/webui"
 )
 
 func main() {
@@ -24,6 +25,7 @@ func main() {
 		listen     = env("LISTEN_ADDR", ":8080")
 		storage    = env("STORAGE", "disk") // disk | s3
 		configFile = env("CONFIG_FILE", "") // nơi web UI lưu cấu hình kết nối; rỗng = không lưu
+		uiPassword = env("UI_PASSWORD", "")
 	)
 	log = log.With("node", nodeID)
 
@@ -61,19 +63,30 @@ func main() {
 	used, count := store.Stats()
 	log.Info("node khởi động", "storage", where, "shard_count", count, "used_bytes", used)
 
-	srv := &http.Server{
-		Addr:    listen,
-		Handler: (&node.Server{ID: nodeID, Store: store, Log: log}).Routes(),
+	reporter := node.NewReporter(nodeID, settings, store, log)
+	admin := &node.Admin{
+		ID: nodeID, Store: store, Storage: where, Reporter: reporter,
+		ConfigFile: configFile, StartedAt: time.Now(), Log: log,
 	}
+
+	// API shard giữ nguyên ở gốc; web UI và API riêng của nó nằm dưới /ui/.
+	mux := http.NewServeMux()
+	mux.Handle("/", (&node.Server{ID: nodeID, Store: store, Log: log}).Routes())
+	mux.Handle("/ui/", webui.Handler(webui.NodePage, admin.Routes(), uiPassword))
+	mux.Handle("GET /{$}", http.RedirectHandler("/ui/", http.StatusFound))
+	if uiPassword == "" {
+		log.Warn("chưa đặt UI_PASSWORD: ai vào được mạng này cũng mở được web UI")
+	}
+
+	srv := &http.Server{Addr: listen, Handler: mux}
 	go func() {
-		log.Info("nghe HTTP", "listen", listen, "addr", settings.Addr)
+		log.Info("nghe HTTP", "listen", listen, "addr", settings.Addr, "web_ui", "/ui/")
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error("HTTP server dừng", "err", err)
 			stop()
 		}
 	}()
 
-	reporter := node.NewReporter(nodeID, settings, store, log)
 	go reporter.Run(ctx)
 
 	<-ctx.Done()

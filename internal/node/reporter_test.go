@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -209,4 +210,125 @@ func TestSettingsFile(t *testing.T) {
 	if _, _, err := LoadSettings(path, defaults); err == nil {
 		t.Fatal("file hỏng mà không báo lỗi")
 	}
+}
+
+// --- API admin ---
+
+func newAdminFixture(t *testing.T, coordURL string) (*Admin, http.Handler) {
+	t.Helper()
+	store, err := NewDiskStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := slog.New(slog.DiscardHandler)
+	r := NewReporter("node-1", testSettings(coordURL), store, log)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go r.Run(ctx)
+
+	a := &Admin{
+		ID: "node-1", Store: store, Storage: "disk test", Reporter: r,
+		ConfigFile: filepath.Join(t.TempDir(), "node.json"), StartedAt: time.Now(), Log: log,
+	}
+	return a, a.Routes()
+}
+
+func call(h http.Handler, method, path, body string) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(method, path, strings.NewReader(body)))
+	return rec
+}
+
+func TestAdminUpdateSettings(t *testing.T) {
+	a, b := newFakeCoordinator(t), newFakeCoordinator(t)
+	admin, h := newAdminFixture(t, a.URL)
+
+	rec := call(h, http.MethodPut, "/ui/api/settings",
+		`{"coordinator_url":"coordinator:9000","addr":"http://node-1:8080","capacity":1048576,"heartbeat_interval":"1s"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("URL sai = %d, mong đợi 400", rec.Code)
+	}
+	if _, err := os.Stat(admin.ConfigFile); !os.IsNotExist(err) {
+		t.Fatal("cấu hình sai mà vẫn ghi file")
+	}
+
+	body := `{"coordinator_url":"` + b.URL + `/","addr":"http://node-1:8080","capacity":2097152,"heartbeat_interval":"100ms"}`
+	rec = call(h, http.MethodPut, "/ui/api/settings", body)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"saved":true`) {
+		t.Fatalf("PUT hợp lệ = %d %s", rec.Code, rec.Body)
+	}
+	saved, found, err := LoadSettings(admin.ConfigFile, Settings{})
+	if err != nil || !found || saved.CoordinatorURL != b.URL || saved.Capacity != 2<<20 {
+		t.Fatalf("file cấu hình = %+v, %v, %v", saved, found, err)
+	}
+	waitFor(t, "node chuyển sang coordinator mới", func() bool {
+		reg, _, _ := b.counts()
+		return reg == 1
+	})
+
+	var st struct {
+		NodeID     string     `json:"node_id"`
+		Settings   Settings   `json:"settings"`
+		Connection ConnStatus `json:"connection"`
+	}
+	json.Unmarshal(call(h, http.MethodGet, "/ui/api/status", "").Body.Bytes(), &st)
+	if st.NodeID != "node-1" || st.Settings.CoordinatorURL != b.URL {
+		t.Fatalf("status = %+v", st)
+	}
+}
+
+func TestAdminTestConnection(t *testing.T) {
+	coord := newFakeCoordinator(t)
+	_, h := newAdminFixture(t, coord.URL)
+
+	// Một node cũng trả 200 ở /healthz; phép thử phải nhận ra đó không phải coordinator.
+	otherNode := httptest.NewServer((&Server{ID: "node-2", Store: nil}).Routes())
+	t.Cleanup(otherNode.Close)
+	dead := httptest.NewServer(http.NotFoundHandler())
+	dead.Close()
+
+	cases := []struct {
+		url    string
+		wantOK bool
+	}{
+		{coord.URL, true},
+		{otherNode.URL, false},
+		{dead.URL, false},
+	}
+	for _, c := range cases {
+		rec := call(h, http.MethodPost, "/ui/api/test-connection", `{"coordinator_url":"`+c.url+`"}`)
+		var res struct {
+			OK    bool   `json:"ok"`
+			Nodes int    `json:"nodes"`
+			Error string `json:"error"`
+		}
+		json.Unmarshal(rec.Body.Bytes(), &res)
+		if rec.Code != http.StatusOK || res.OK != c.wantOK {
+			t.Errorf("thử %s: %d %s, mong đợi ok=%v", c.url, rec.Code, rec.Body, c.wantOK)
+		}
+		if c.wantOK && res.Nodes != 2 {
+			t.Errorf("thử %s: nodes = %d, mong đợi 2", c.url, res.Nodes)
+		}
+	}
+
+	if rec := call(h, http.MethodPost, "/ui/api/test-connection", `{"coordinator_url":"không phải url"}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("URL sai = %d, mong đợi 400", rec.Code)
+	}
+}
+
+func TestAdminDisconnectAndConnect(t *testing.T) {
+	coord := newFakeCoordinator(t)
+	admin, h := newAdminFixture(t, coord.URL)
+	waitFor(t, "kết nối", func() bool { return admin.Reporter.state() == StateConnected })
+
+	if rec := call(h, http.MethodPost, "/ui/api/disconnect", ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("disconnect = %d", rec.Code)
+	}
+	if got := admin.Reporter.state(); got != StatePaused {
+		t.Fatalf("state = %s sau khi ngắt", got)
+	}
+	if rec := call(h, http.MethodPost, "/ui/api/connect", ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("connect = %d", rec.Code)
+	}
+	waitFor(t, "kết nối lại", func() bool { return admin.Reporter.state() == StateConnected })
 }
