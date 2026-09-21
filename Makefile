@@ -3,7 +3,7 @@ COMPOSE := docker compose -f deploy/docker-compose.yml
 DOCKER_USER := $(shell id -u):$(shell id -g)
 WORK := deploy/work
 
-.PHONY: help build dist test race up down logs ps nodes ls put get demo-file chaos sim clean
+.PHONY: help build dist test race up down logs ps nodes ls put get demo-file chaos watch sim clean
 
 help: ## In danh sách lệnh
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  make %-12s %s\n", $$1, $$2}'
@@ -58,6 +58,9 @@ get: ## Tải file: make get ID=<file_id> OUT=out.bin
 
 chaos: ## Tắt/bật node ngẫu nhiên trong 2 phút
 	./scripts/chaos.sh 120
+
+watch: ## Bảng số segment theo mức độ khỏe, làm mới mỗi 5s
+	./scripts/watch-health.sh
 
 sim: ## Mô phỏng nghìn node để chọn k/m và ngưỡng repair
 	go run ./cmd/simulator -compare km
