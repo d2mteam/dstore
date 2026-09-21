@@ -22,6 +22,8 @@ func main() {
 		healthEvery   = envDuration("HEALTH_INTERVAL", 5*time.Second)
 		healthTimeout = envDuration("HEARTBEAT_TIMEOUT", 20*time.Second)
 		repairEvery   = envDuration("REPAIR_INTERVAL", 10*time.Second)
+		gcEvery       = envDuration("GC_INTERVAL", 60*time.Second)
+		gcGrace       = envDuration("GC_GRACE", 2*time.Minute)
 	)
 
 	store := coordinator.NewStore()
@@ -36,6 +38,10 @@ func main() {
 		Store: store, Placer: placer, Shards: shards,
 		Interval: repairEvery, Log: log,
 	}
+	collector := &coordinator.Collector{
+		Store: store, Shards: shards,
+		Interval: gcEvery, Grace: gcGrace, Log: log,
+	}
 	api := &coordinator.Server{
 		Store: store, Placer: placer, Health: health, Shards: shards, Log: log,
 	}
@@ -45,11 +51,13 @@ func main() {
 
 	go health.Run(ctx)
 	go repairer.Run(ctx)
+	go collector.Run(ctx)
 
 	srv := &http.Server{Addr: listen, Handler: api.Routes()}
 	go func() {
 		log.Info("coordinator nghe HTTP", "listen", listen,
-			"heartbeat_timeout", healthTimeout, "repair_interval", repairEvery)
+			"heartbeat_timeout", healthTimeout, "repair_interval", repairEvery,
+			"gc_interval", gcEvery, "gc_grace", gcGrace)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error("HTTP server dừng", "err", err)
 			stop()

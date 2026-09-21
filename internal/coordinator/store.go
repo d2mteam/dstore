@@ -350,6 +350,26 @@ type ShardLocation struct {
 	Hash     string
 }
 
+// ReferencedHashes trả về tập hash mà metadata nói node này đang giữ, kể cả
+// shard đang lost (node có thể sống lại và dùng lại chúng). Shard trên đĩa mà
+// không nằm trong tập này là shard mồ côi.
+func (s *Store) ReferencedHashes(nodeID string) map[string]bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make(map[string]bool)
+	for _, f := range s.files {
+		for _, seg := range f.Segments {
+			for _, sh := range seg.Shards {
+				if sh.NodeID == nodeID {
+					out[sh.Hash] = true
+				}
+			}
+		}
+	}
+	return out
+}
+
 // --- Dùng cho repair ---
 
 // SegmentRef trỏ tới một segment cần sửa.

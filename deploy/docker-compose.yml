@@ -28,6 +28,8 @@ services:
       HEALTH_INTERVAL: 5s
       HEARTBEAT_TIMEOUT: 20s
       REPAIR_INTERVAL: 10s
+      GC_INTERVAL: 30s
+      GC_GRACE: 60s # phải lớn hơn thời gian upload một file, xem README
     ports:
       - "9000:9000" # để xem API từ máy host, ví dụ curl localhost:9000/nodes
 
