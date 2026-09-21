@@ -142,9 +142,32 @@ type FileInfo struct {
 	M         int       `json:"m"`
 	Status    string    `json:"status"`
 	CreatedAt time.Time `json:"created_at"`
+	Segments  int       `json:"segments"`
+	// MinHealthy là số shard khỏe của segment yếu nhất: bằng k+m là đủ, dưới k là mất dữ liệu.
+	MinHealthy int `json:"min_healthy"`
 }
 
 // ErrorResponse là body trả về khi có lỗi.
 type ErrorResponse struct {
 	Error string `json:"error"`
+}
+
+// Duration là time.Duration đọc/ghi JSON dạng chuỗi "20s", cùng cách viết với
+// biến môi trường, để cấu hình sửa qua web UI dễ đọc.
+type Duration time.Duration
+
+// String để log in "15s" thay vì số nano giây.
+func (d Duration) String() string { return time.Duration(d).String() }
+
+func (d Duration) MarshalText() ([]byte, error) {
+	return []byte(time.Duration(d).String()), nil
+}
+
+func (d *Duration) UnmarshalText(b []byte) error {
+	v, err := time.ParseDuration(string(b))
+	if err != nil {
+		return err
+	}
+	*d = Duration(v)
+	return nil
 }

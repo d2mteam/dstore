@@ -317,9 +317,14 @@ func (s *Store) Files() []protocol.FileInfo {
 		if !f.Committed {
 			continue
 		}
+		minHealthy := f.K + f.M
+		for _, seg := range f.Segments {
+			minHealthy = min(minHealthy, seg.OKCount())
+		}
 		out = append(out, protocol.FileInfo{
 			ID: f.ID, Name: f.Name, Size: f.Size, K: f.K, M: f.M,
 			Status: f.Status, CreatedAt: f.CreatedAt,
+			Segments: len(f.Segments), MinHealthy: minHealthy,
 		})
 	}
 	sortFilesByTime(out)
