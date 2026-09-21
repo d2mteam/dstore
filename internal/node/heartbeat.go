@@ -19,7 +19,7 @@ type Reporter struct {
 	Addr           string
 	Capacity       int64
 	Interval       time.Duration
-	Store          *DiskStore
+	Store          ShardStore
 	Log            *slog.Logger
 
 	client *http.Client

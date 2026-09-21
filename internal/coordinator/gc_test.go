@@ -54,7 +54,7 @@ func newGCFixture(t *testing.T, grace time.Duration) *gcFixture {
 func (f *gcFixture) put(content string) string {
 	f.t.Helper()
 	hash := ec.Hash([]byte(content))
-	if err := f.disk.Put(hash, bytes.NewReader([]byte(content))); err != nil {
+	if err := f.disk.Put(context.Background(), hash, bytes.NewReader([]byte(content))); err != nil {
 		f.t.Fatal(err)
 	}
 	return hash
@@ -89,7 +89,7 @@ func TestCollectorRemovesOrphanKeepsReferenced(t *testing.T) {
 	if n := f.gc.RunOnce(ctx); n != 0 {
 		t.Fatalf("lượt quét đầu đã xóa %d shard, lẽ ra phải chờ hết thời gian ân hạn", n)
 	}
-	if !f.disk.Has(orphan) {
+	if !f.disk.Has(context.Background(), orphan) {
 		t.Fatal("shard bị xóa ngay trong lượt quét đầu")
 	}
 
@@ -97,10 +97,10 @@ func TestCollectorRemovesOrphanKeepsReferenced(t *testing.T) {
 	if n := f.gc.RunOnce(ctx); n != 1 {
 		t.Fatalf("xóa %d shard, mong đợi 1", n)
 	}
-	if f.disk.Has(orphan) {
+	if f.disk.Has(context.Background(), orphan) {
 		t.Fatal("shard mồ côi vẫn còn trên đĩa")
 	}
-	if !f.disk.Has(kept) {
+	if !f.disk.Has(context.Background(), kept) {
 		t.Fatal("shard đang được tham chiếu bị xóa nhầm")
 	}
 }
@@ -120,7 +120,7 @@ func TestCollectorSpareShardCommittedDuringGrace(t *testing.T) {
 	if n := f.gc.RunOnce(ctx); n != 0 {
 		t.Fatalf("xóa %d shard vừa được commit", n)
 	}
-	if !f.disk.Has(uploading) {
+	if !f.disk.Has(context.Background(), uploading) {
 		t.Fatal("shard vừa commit bị xóa mất")
 	}
 }
@@ -142,7 +142,7 @@ func TestCollectorCleansUpAfterRepair(t *testing.T) {
 	if n := f.gc.RunOnce(ctx); n != 1 {
 		t.Fatalf("xóa %d shard, mong đợi dọn 1 bản cũ sau repair", n)
 	}
-	if f.disk.Has(old) {
+	if f.disk.Has(context.Background(), old) {
 		t.Fatal("bản shard cũ vẫn chiếm đĩa sau repair")
 	}
 }
@@ -156,7 +156,7 @@ func TestCollectorSkipsOfflineNodes(t *testing.T) {
 	if n := f.gc.RunOnce(context.Background()); n != 0 {
 		t.Fatalf("đã xóa %d shard của node offline", n)
 	}
-	if !f.disk.Has(orphan) {
+	if !f.disk.Has(context.Background(), orphan) {
 		t.Fatal("shard trên node offline bị xóa")
 	}
 }

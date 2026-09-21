@@ -2,6 +2,7 @@ package node
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -12,14 +13,39 @@ import (
 	"dstore-demo/internal/ec"
 )
 
-func newTestServer(t *testing.T) *httptest.Server {
+// backend mở một ShardStore mới tinh; reopen mở lại đúng nơi lưu đó như khi
+// node restart.
+type backend struct {
+	name string
+	open func(t *testing.T) (store ShardStore, reopen func() ShardStore)
+}
+
+// backends trả về mọi backend cần test.
+func backends(t *testing.T) []backend {
+	list := []backend{{
+		name: "disk",
+		open: func(t *testing.T) (ShardStore, func() ShardStore) {
+			dir := t.TempDir()
+			store, err := NewDiskStore(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return store, func() ShardStore {
+				s, err := NewDiskStore(dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return s
+			}
+		},
+	}}
+
+	return list
+}
+
+func serve(t *testing.T, store ShardStore) *httptest.Server {
 	t.Helper()
-	store, err := NewDiskStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := &Server{ID: "node-test", Store: store, Log: slog.New(slog.DiscardHandler)}
-	srv := httptest.NewServer(s.Routes())
+	srv := httptest.NewServer((&Server{ID: "node-test", Store: store, Log: slog.New(slog.DiscardHandler)}).Routes())
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -42,89 +68,125 @@ func do(t *testing.T, method, url string, body []byte) *http.Response {
 }
 
 func TestShardRoundTrip(t *testing.T) {
-	srv := newTestServer(t)
-	content := []byte("nội dung shard demo")
-	hash := ec.Hash(content)
+	for _, b := range backends(t) {
+		t.Run(b.name, func(t *testing.T) {
+			store, _ := b.open(t)
+			srv := serve(t, store)
+			content := []byte("nội dung shard demo")
+			hash := ec.Hash(content)
 
-	resp := do(t, http.MethodPut, srv.URL+"/shards/"+hash, content)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("PUT: status %s", resp.Status)
-	}
+			resp := do(t, http.MethodPut, srv.URL+"/shards/"+hash, content)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusCreated {
+				t.Fatalf("PUT: status %s", resp.Status)
+			}
 
-	resp = do(t, http.MethodHead, srv.URL+"/shards/"+hash, nil)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("HEAD: status %s", resp.Status)
-	}
+			resp = do(t, http.MethodHead, srv.URL+"/shards/"+hash, nil)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("HEAD: status %s", resp.Status)
+			}
 
-	resp = do(t, http.MethodGet, srv.URL+"/shards/"+hash, nil)
-	got, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if !bytes.Equal(got, content) {
-		t.Fatalf("GET trả về %q, mong đợi %q", got, content)
-	}
+			resp = do(t, http.MethodGet, srv.URL+"/shards/"+hash, nil)
+			got, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if !bytes.Equal(got, content) {
+				t.Fatalf("GET trả về %q, mong đợi %q", got, content)
+			}
 
-	var hashes []string
-	resp = do(t, http.MethodGet, srv.URL+"/shards", nil)
-	json.NewDecoder(resp.Body).Decode(&hashes)
-	resp.Body.Close()
-	if len(hashes) != 1 || hashes[0] != hash {
-		t.Fatalf("GET /shards trả về %v", hashes)
-	}
+			var hashes []string
+			resp = do(t, http.MethodGet, srv.URL+"/shards", nil)
+			json.NewDecoder(resp.Body).Decode(&hashes)
+			resp.Body.Close()
+			if len(hashes) != 1 || hashes[0] != hash {
+				t.Fatalf("GET /shards trả về %v", hashes)
+			}
 
-	resp = do(t, http.MethodDelete, srv.URL+"/shards/"+hash, nil)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("DELETE: status %s", resp.Status)
-	}
+			if used, count := store.Stats(); count != 1 || used != int64(len(content)) {
+				t.Fatalf("Stats = (%d, %d), mong đợi (%d, 1)", used, count, len(content))
+			}
 
-	resp = do(t, http.MethodGet, srv.URL+"/shards/"+hash, nil)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("GET sau khi xóa: status %s, mong đợi 404", resp.Status)
+			resp = do(t, http.MethodDelete, srv.URL+"/shards/"+hash, nil)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusNoContent {
+				t.Fatalf("DELETE: status %s", resp.Status)
+			}
+
+			resp = do(t, http.MethodGet, srv.URL+"/shards/"+hash, nil)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusNotFound {
+				t.Fatalf("GET sau khi xóa: status %s, mong đợi 404", resp.Status)
+			}
+			if used, count := store.Stats(); count != 0 || used != 0 {
+				t.Fatalf("Stats sau khi xóa = (%d, %d), mong đợi (0, 0)", used, count)
+			}
+		})
 	}
 }
 
-// Node phải từ chối nội dung không khớp hash trong URL.
+// Node phải từ chối nội dung không khớp hash trong URL, và không lưu lại gì.
 func TestPutRejectsWrongHash(t *testing.T) {
-	srv := newTestServer(t)
-	hash := ec.Hash([]byte("nội dung thật"))
+	for _, b := range backends(t) {
+		t.Run(b.name, func(t *testing.T) {
+			store, _ := b.open(t)
+			srv := serve(t, store)
+			hash := ec.Hash([]byte("nội dung thật"))
 
-	resp := do(t, http.MethodPut, srv.URL+"/shards/"+hash, []byte("nội dung bị sửa"))
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("status %s, mong đợi 400", resp.Status)
-	}
-
-	resp = do(t, http.MethodGet, srv.URL+"/shards/"+hash, nil)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatal("shard sai hash không được phép lưu lại trên đĩa")
+			resp := do(t, http.MethodPut, srv.URL+"/shards/"+hash, []byte("nội dung bị sửa"))
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status %s, mong đợi 400", resp.Status)
+			}
+			if store.Has(context.Background(), hash) {
+				t.Fatal("shard sai hash không được phép lưu lại")
+			}
+		})
 	}
 }
 
-// Sau khi node restart, shard cũ trên đĩa vẫn được đếm và đọc được.
-func TestStoreRescansAfterRestart(t *testing.T) {
-	dir := t.TempDir()
-	store, err := NewDiskStore(dir)
-	if err != nil {
-		t.Fatal(err)
+// Ghi lại đúng nội dung đã có không được đếm hai lần.
+func TestPutSameShardTwice(t *testing.T) {
+	for _, b := range backends(t) {
+		t.Run(b.name, func(t *testing.T) {
+			store, _ := b.open(t)
+			content := []byte("shard trùng lặp")
+			for range 2 {
+				if err := store.Put(context.Background(), ec.Hash(content), bytes.NewReader(content)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, count := store.Stats(); count != 1 {
+				t.Fatalf("count = %d, mong đợi 1", count)
+			}
+		})
 	}
-	content := []byte("shard sống sót qua restart")
-	if err := store.Put(ec.Hash(content), bytes.NewReader(content)); err != nil {
-		t.Fatal(err)
-	}
+}
 
-	reopened, err := NewDiskStore(dir) // như khi node khởi động lại
-	if err != nil {
-		t.Fatal(err)
-	}
-	used, count := reopened.Stats()
-	if count != 1 || used != int64(len(content)) {
-		t.Fatalf("sau restart: count=%d used=%d", count, used)
-	}
-	if !reopened.Has(ec.Hash(content)) {
-		t.Fatal("shard cũ không tìm thấy sau restart")
+// Sau khi node restart, shard cũ vẫn được đếm và đọc được.
+func TestStoreRecountsAfterRestart(t *testing.T) {
+	for _, b := range backends(t) {
+		t.Run(b.name, func(t *testing.T) {
+			store, reopen := b.open(t)
+			content := []byte("shard sống sót qua restart")
+			hash := ec.Hash(content)
+			if err := store.Put(context.Background(), hash, bytes.NewReader(content)); err != nil {
+				t.Fatal(err)
+			}
+
+			reopened := reopen()
+			used, count := reopened.Stats()
+			if count != 1 || used != int64(len(content)) {
+				t.Fatalf("sau restart: count=%d used=%d", count, used)
+			}
+			rc, size, err := reopened.Open(context.Background(), hash)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, _ := io.ReadAll(rc)
+			rc.Close()
+			if size != int64(len(content)) || !bytes.Equal(got, content) {
+				t.Fatal("shard đọc lại sau restart không khớp")
+			}
+		})
 	}
 }

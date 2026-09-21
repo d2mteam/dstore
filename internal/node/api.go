@@ -6,14 +6,13 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"strconv"
 )
 
 // Server phục vụ API shard của một node.
 type Server struct {
 	ID    string
-	Store *DiskStore
+	Store ShardStore
 	Log   *slog.Logger
 }
 
@@ -30,15 +29,15 @@ func (s *Server) Routes() http.Handler {
 
 func (s *Server) putShard(w http.ResponseWriter, r *http.Request) {
 	hash := r.PathValue("hash")
-	if err := s.Store.Put(hash, r.Body); err != nil {
-		// Hash không khớp là lỗi của client, không phải lỗi node.
-		if errors.Is(err, ErrHashMismatch) {
-			s.Log.Warn("từ chối shard sai hash", "hash", hash, "err", err)
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
+	if err := s.Store.Put(r.Context(), hash, r.Body); err != nil {
+		status := statusFor(err)
+		if status == http.StatusBadRequest {
+			// Hash không khớp là lỗi của client, không phải lỗi node.
+			s.Log.Warn("từ chối shard", "hash", hash, "err", err)
+		} else {
+			s.Log.Error("ghi shard lỗi", "hash", hash, "err", err)
 		}
-		s.Log.Error("ghi shard lỗi", "hash", hash, "err", err)
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, status, err.Error())
 		return
 	}
 	s.Log.Debug("nhận shard", "hash", hash)
@@ -46,9 +45,9 @@ func (s *Server) putShard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getShard(w http.ResponseWriter, r *http.Request) {
-	f, size, err := s.Store.Open(r.PathValue("hash"))
+	f, size, err := s.Store.Open(r.Context(), r.PathValue("hash"))
 	if err != nil {
-		writeError(w, statusForOpenErr(err), "không có shard này")
+		writeError(w, statusFor(err), err.Error())
 		return
 	}
 	defer f.Close()
@@ -59,7 +58,7 @@ func (s *Server) getShard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) headShard(w http.ResponseWriter, r *http.Request) {
-	if !s.Store.Has(r.PathValue("hash")) {
+	if !s.Store.Has(r.Context(), r.PathValue("hash")) {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
@@ -67,15 +66,15 @@ func (s *Server) headShard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteShard(w http.ResponseWriter, r *http.Request) {
-	if err := s.Store.Delete(r.PathValue("hash")); err != nil {
-		writeError(w, statusForOpenErr(err), err.Error())
+	if err := s.Store.Delete(r.Context(), r.PathValue("hash")); err != nil {
+		writeError(w, statusFor(err), err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) listShards(w http.ResponseWriter, r *http.Request) {
-	hashes, err := s.Store.List()
+	hashes, err := s.Store.List(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -95,11 +94,18 @@ func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func statusForOpenErr(err error) int {
-	if errors.Is(err, os.ErrNotExist) {
+// statusFor quy lỗi của ShardStore ra mã HTTP.
+func statusFor(err error) int {
+	switch {
+	case errors.Is(err, ErrNotFound):
 		return http.StatusNotFound
+	case errors.Is(err, ErrInvalidHash), errors.Is(err, ErrHashMismatch):
+		return http.StatusBadRequest
+	case errors.Is(err, ErrTooLarge):
+		return http.StatusRequestEntityTooLarge
+	default:
+		return http.StatusInternalServerError
 	}
-	return http.StatusBadRequest
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

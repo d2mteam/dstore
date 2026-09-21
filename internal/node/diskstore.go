@@ -1,7 +1,8 @@
-// Package node là data plane: lưu shard trên đĩa theo hash và phục vụ PUT/GET.
+// Package node là data plane: lưu shard theo hash và phục vụ PUT/GET.
 package node
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -12,9 +13,6 @@ import (
 	"strings"
 	"sync"
 )
-
-// ErrHashMismatch: nội dung gửi lên không khớp hash trong URL.
-var ErrHashMismatch = errors.New("nội dung không khớp hash")
 
 // DiskStore lưu shard tại <dir>/ab/cd/abcd... (chia thư mục theo 2 cặp ký tự đầu
 // của hash để một thư mục không chứa quá nhiều file).
@@ -60,19 +58,11 @@ func (s *DiskStore) path(hash string) string {
 	return filepath.Join(s.dir, hash[0:2], hash[2:4], hash)
 }
 
-func validHash(hash string) bool {
-	if len(hash) != 64 {
-		return false
-	}
-	_, err := hex.DecodeString(hash)
-	return err == nil
-}
-
 // Put ghi shard ra file tạm, kiểm tra hash rồi mới rename vào vị trí chính thức,
 // nên trên đĩa không bao giờ có shard ghi dở.
-func (s *DiskStore) Put(hash string, r io.Reader) error {
+func (s *DiskStore) Put(_ context.Context, hash string, r io.Reader) error {
 	if !validHash(hash) {
-		return fmt.Errorf("hash không hợp lệ: %q", hash)
+		return fmt.Errorf("%w: %q", ErrInvalidHash, hash)
 	}
 	final := s.path(hash)
 	if err := os.MkdirAll(filepath.Dir(final), 0o755); err != nil {
@@ -113,12 +103,14 @@ func (s *DiskStore) Put(hash string, r io.Reader) error {
 	return nil
 }
 
-// Open mở shard để đọc; caller phải Close.
-func (s *DiskStore) Open(hash string) (*os.File, int64, error) {
+func (s *DiskStore) Open(_ context.Context, hash string) (io.ReadCloser, int64, error) {
 	if !validHash(hash) {
-		return nil, 0, fmt.Errorf("hash không hợp lệ: %q", hash)
+		return nil, 0, fmt.Errorf("%w: %q", ErrInvalidHash, hash)
 	}
 	f, err := os.Open(s.path(hash))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, 0, ErrNotFound
+	}
 	if err != nil {
 		return nil, 0, err
 	}
@@ -130,7 +122,7 @@ func (s *DiskStore) Open(hash string) (*os.File, int64, error) {
 	return f, info.Size(), nil
 }
 
-func (s *DiskStore) Has(hash string) bool {
+func (s *DiskStore) Has(_ context.Context, hash string) bool {
 	if !validHash(hash) {
 		return false
 	}
@@ -138,11 +130,14 @@ func (s *DiskStore) Has(hash string) bool {
 	return err == nil
 }
 
-func (s *DiskStore) Delete(hash string) error {
+func (s *DiskStore) Delete(_ context.Context, hash string) error {
 	if !validHash(hash) {
-		return fmt.Errorf("hash không hợp lệ: %q", hash)
+		return fmt.Errorf("%w: %q", ErrInvalidHash, hash)
 	}
 	info, err := os.Stat(s.path(hash))
+	if errors.Is(err, os.ErrNotExist) {
+		return ErrNotFound
+	}
 	if err != nil {
 		return err
 	}
@@ -156,8 +151,7 @@ func (s *DiskStore) Delete(hash string) error {
 	return nil
 }
 
-// List trả về hash của mọi shard đang giữ (coordinator dùng để đối chiếu khi node sống lại).
-func (s *DiskStore) List() ([]string, error) {
+func (s *DiskStore) List(_ context.Context) ([]string, error) {
 	var hashes []string
 	err := filepath.WalkDir(s.dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -174,7 +168,6 @@ func (s *DiskStore) List() ([]string, error) {
 	return hashes, err
 }
 
-// Stats trả về số byte và số shard đang giữ.
 func (s *DiskStore) Stats() (used int64, count int) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
