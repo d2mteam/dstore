@@ -3,4 +3,6 @@ deploy/work
 bin/coordinator
 bin/node
 bin/dsctl
+bin/gateway
+bin/simulator
 *.bin

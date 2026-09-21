@@ -6,5 +6,5 @@
 # Nếu máy bạn build có mạng, có thể thay bằng bản multi-stage (xem README).
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates
-COPY bin/linux/coordinator bin/linux/node bin/linux/dsctl /app/
+COPY bin/linux/coordinator bin/linux/node bin/linux/dsctl bin/linux/gateway /app/
 WORKDIR /app

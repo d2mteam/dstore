@@ -13,11 +13,13 @@ build: ## Build binary cho máy hiện tại, ra thư mục bin/
 	go build -o bin/node ./cmd/node
 	go build -o bin/dsctl ./cmd/dsctl
 	go build -o bin/simulator ./cmd/simulator
+	go build -o bin/gateway ./cmd/gateway
 
 dist: ## Build binary tĩnh cho Linux vào bin/linux/ (image Docker dùng bản này)
 	CGO_ENABLED=0 GOOS=linux go build -o bin/linux/coordinator ./cmd/coordinator
 	CGO_ENABLED=0 GOOS=linux go build -o bin/linux/node ./cmd/node
 	CGO_ENABLED=0 GOOS=linux go build -o bin/linux/dsctl ./cmd/dsctl
+	CGO_ENABLED=0 GOOS=linux go build -o bin/linux/gateway ./cmd/gateway
 
 test: ## Chạy toàn bộ test
 	go test ./...

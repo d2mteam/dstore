@@ -33,6 +33,28 @@ services:
     ports:
       - "9000:9000" # để xem API từ máy host, ví dụ curl localhost:9000/nodes
 
+  # Gateway là thành phần duy nhất mở ra ngoài; coordinator và node nằm trong
+  # mạng nội bộ của compose.
+  gateway:
+    image: dstore-demo:latest
+    build:
+      context: ..
+    container_name: gateway
+    command: ["/app/gateway"]
+    depends_on:
+      - coordinator
+    environment:
+      LISTEN_ADDR: ":8000"
+      COORDINATOR_URL: http://coordinator:9000
+      API_KEYS: "demo-key:demo,app-b-key:app-b"
+      EC_K: "4"
+      EC_M: "2"
+      SEGMENT_SIZE: "4194304"
+      MAX_UPLOAD_BYTES: "536870912"
+      MAX_CONCURRENT: "32"
+    ports:
+      - "8000:8000"
+
   node-1:
     <<: *node
     container_name: node-1
