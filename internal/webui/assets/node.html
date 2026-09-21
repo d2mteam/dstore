@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>dstore · Node</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='2' y='1' width='12' height='14' rx='2' fill='%231f6feb'/%3E%3Ccircle cx='8' cy='11' r='1.6' fill='white'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="static/style.css">
+  <script type="module" src="static/node.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">dstore <span class="role">Node</span> <span id="node-id" class="mono"></span></div>
+    <div class="top-status" id="top-status"><span class="muted">đang tải…</span></div>
+  </header>
+
+  <main class="wrap">
+    <div id="banners"></div>
+    <div class="cards" id="cards"></div>
+
+    <div class="grid2">
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Kết nối tới coordinator</h2>
+          <span class="hint" id="settings-state"></span>
+        </div>
+        <form id="settings" class="form" autocomplete="off">
+          <label class="field">
+            <span>Địa chỉ coordinator</span>
+            <span class="inline">
+              <input type="url" name="coordinator_url" placeholder="http://coordinator:9000" required>
+              <button class="btn" type="button" id="test-conn">Kiểm tra</button>
+            </span>
+            <span id="test-result"></span>
+            <span class="hint">Đổi sang coordinator khác thì cụm cũ sẽ coi node này là chết và chép shard của nó sang node khác.</span>
+          </label>
+          <label class="field">
+            <span>Địa chỉ của node này</span>
+            <input type="url" name="addr" placeholder="http://node-1:8080" required>
+            <span class="hint">Địa chỉ mà client và coordinator dùng để gọi tới node, không phải địa chỉ node đang nghe.</span>
+          </label>
+          <label class="field">
+            <span>Dung lượng cho phép (MiB)</span>
+            <input type="number" name="capacity_mib" min="1" step="any" required>
+            <span class="hint">Coordinator không đặt thêm shard lên node khi phần trống không đủ.</span>
+          </label>
+          <label class="field">
+            <span>Nhịp heartbeat</span>
+            <input type="text" name="heartbeat_interval" placeholder="5s" required>
+            <span class="hint">Phải nhỏ hơn heartbeat timeout của coordinator (mặc định 20s), nếu không node sẽ bị coi là chết.</span>
+          </label>
+          <div class="actions-row">
+            <button class="btn primary" type="submit">Lưu và kết nối lại</button>
+            <button class="btn" type="button" id="settings-reset">Hoàn tác</button>
+          </div>
+          <span class="hint" id="persist-note"></span>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><h2>Tình trạng kết nối</h2></div>
+        <dl class="kv" id="conn"></dl>
+        <h3>Ngắt kết nối tạm thời</h3>
+        <p class="hint">Node ngừng heartbeat nhưng vẫn phục vụ shard, giống như bị cắt mạng tới coordinator.
+          Sau heartbeat timeout, coordinator coi node là chết và chạy repair; nối lại thì node được đối chiếu shard và
+          shard bị chép thừa sẽ được GC dọn.</p>
+        <div class="actions-row">
+          <button class="btn danger" type="button" id="disconnect">Ngắt kết nối</button>
+          <button class="btn" type="button" id="connect">Kết nối lại</button>
+        </div>
+
+        <h3>Thông tin node</h3>
+        <dl class="kv" id="info"></dl>
+      </section>
+    </div>
+
+    <section class="panel" style="margin-top:16px">
+      <div class="panel-head">
+        <h2>Shard đang giữ</h2>
+        <div class="actions-row">
+          <input type="search" id="shard-filter" placeholder="Lọc theo hash…" style="width:220px">
+          <button class="btn small" type="button" id="load-shards">Tải danh sách</button>
+        </div>
+      </div>
+      <p class="hint" id="shards-hint">Danh sách không tự làm mới: với S3, liệt kê object tốn một lượt gọi API mỗi 1000 shard.</p>
+      <ul class="hashes" id="shards"></ul>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

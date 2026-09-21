@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>dstore · Control plane</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='1' y='2' width='14' height='3' rx='1' fill='%231f6feb'/%3E%3Crect x='1' y='6.5' width='14' height='3' rx='1' fill='%231f6feb'/%3E%3Crect x='1' y='11' width='14' height='3' rx='1' fill='%231a7f37'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="static/style.css">
+  <script type="module" src="static/coordinator.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">dstore <span class="role">Control plane</span></div>
+    <div class="top-status" id="top-status"><span class="muted">đang tải…</span></div>
+  </header>
+
+  <main class="wrap">
+    <div id="banners"></div>
+    <div class="cards" id="cards"></div>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Độ khỏe segment</h2>
+        <span class="hint">Số segment theo số shard còn khỏe. Dưới k shard là mất dữ liệu.</span>
+      </div>
+      <div id="health" class="bars"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Node</h2>
+        <span class="hint" id="nodes-hint"></span>
+      </div>
+      <div class="scroll">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th>Node</th><th>Địa chỉ</th><th>Trạng thái</th><th>Dung lượng</th>
+              <th class="num">Shard</th><th>Heartbeat</th>
+            </tr>
+          </thead>
+          <tbody id="nodes"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>File</h2>
+        <span class="hint" id="files-hint"></span>
+      </div>
+      <div class="scroll">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th>Tên</th><th>ID</th><th class="num">Kích thước</th><th>k + m</th>
+              <th>Shard khỏe</th><th>Tạo lúc</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="files"></tbody>
+        </table>
+      </div>
+      <div id="file-detail"></div>
+    </section>
+
+    <div class="grid2">
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Cấu hình vận hành</h2>
+          <span class="hint" id="settings-state"></span>
+        </div>
+        <form id="settings" class="form" autocomplete="off">
+          <label class="field">
+            <span>Heartbeat timeout</span>
+            <input type="text" name="heartbeat_timeout" placeholder="20s" required>
+            <span class="hint">Node quá hạn này không heartbeat thì bị coi là chết và repair bắt đầu chép lại shard của nó. Phải lớn hơn nhịp heartbeat của node.</span>
+          </label>
+          <label class="field">
+            <span>GC grace</span>
+            <input type="text" name="gc_grace" placeholder="2m" required>
+            <span class="hint">Shard phải mồ côi liên tục chừng này mới bị xóa. Phải lớn hơn thời gian upload file lớn nhất.</span>
+          </label>
+          <label class="check"><input type="checkbox" name="repair_paused"> Tạm dừng repair tự động</label>
+          <label class="check"><input type="checkbox" name="gc_paused"> Tạm dừng GC tự động</label>
+          <div class="actions-row">
+            <button class="btn primary" type="submit">Lưu cấu hình</button>
+            <button class="btn" type="button" id="settings-reset">Hoàn tác</button>
+          </div>
+          <span class="hint">Lưu vào DB metadata: restart vẫn giữ, và được dùng thay cho giá trị trong biến môi trường.</span>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><h2>Hoạt động nền</h2></div>
+        <div class="stats" id="counters"></div>
+        <dl class="kv" id="runs" style="margin-bottom:12px"></dl>
+        <div class="actions-row">
+          <button class="btn" type="button" id="run-repair">Chạy repair ngay</button>
+          <button class="btn" type="button" id="run-gc">Chạy GC ngay</button>
+        </div>
+        <p class="hint" style="margin-top:8px">Chạy được cả khi vòng tự động đang tạm dừng. GC vẫn chờ đủ grace trước khi xóa.</p>
+
+        <h3>Thông số khởi động (biến môi trường, cần restart để đổi)</h3>
+        <dl class="kv" id="startup"></dl>
+      </section>
+    </div>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>
